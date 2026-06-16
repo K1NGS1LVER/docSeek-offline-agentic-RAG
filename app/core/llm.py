@@ -6,7 +6,9 @@ Supports streaming for real-time response delivery.
 """
 
 import logging
-from openai import OpenAI
+# pyrefly: ignore [missing-import]
+from openai import AsyncOpenAI
+
 from .config import LLM_BASE_URL, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,7 @@ class OllamaLLM:
     """Manages LLM interactions via Ollama's OpenAI-compatible API."""
 
     def __init__(self):
-        self.client = OpenAI(
+        self.client = AsyncOpenAI(
             base_url=LLM_BASE_URL,
             api_key="ollama",  # Ollama doesn't need a real key
         )
@@ -48,7 +50,7 @@ class OllamaLLM:
 
         return "\n\n".join(parts)
 
-    def stream_answer(self, query: str, context: str):
+    async def stream_answer(self, query: str, context: str):
         """
         Stream an LLM answer given a user query and retrieved context.
         Yields text chunks as they arrive from the model.
@@ -62,7 +64,7 @@ class OllamaLLM:
 </user_query>"""
 
         try:
-            stream = self.client.chat.completions.create(
+            stream = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -73,7 +75,7 @@ class OllamaLLM:
                 stream=True,
             )
 
-            for chunk in stream:
+            async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
 

@@ -198,13 +198,16 @@ export default function AppPage({ theme, setTheme }) {
       const decoder = new TextDecoder()
       let done = false
       let fullText = ''
+      let buffer = '' // Initialize line buffer
 
       while (!done) {
         const { value, done: doneReading } = await reader.read()
         done = doneReading
         if (value) {
-          const chunk = decoder.decode(value, { stream: true })
-          const lines = chunk.split('\n')
+          buffer += decoder.decode(value, { stream: !done })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || '' // Retain incomplete line
+          
           for (const line of lines) {
             if (line.startsWith('data: ')) {
               try {
@@ -218,6 +221,18 @@ export default function AppPage({ theme, setTheme }) {
               }
             }
           }
+        }
+      }
+      
+      // Handle any trailing SSE chunk in the buffer
+      if (buffer.startsWith('data: ')) {
+        try {
+          const data = JSON.parse(buffer.slice(6))
+          fullText += data
+          setLlmResponse(fullText)
+        } catch (e) {
+          fullText += buffer.slice(6)
+          setLlmResponse(fullText)
         }
       }
       setSearchTime(Math.round(performance.now() - t0))
@@ -331,7 +346,7 @@ export default function AppPage({ theme, setTheme }) {
           <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
             {['upload', 'paste', 'github'].map(t => (
               <button key={t} onClick={() => setTab(t)}
-                style={{ flex: 1, padding: '10px 0', ...mono, fontSize: 10, color: tab === t ? 'var(--accent)' : 'var(--t3)', letterSpacing: '.08em', textTransform: 'uppercase', borderBottom: `2px solid ${tab === t ? 'var(--accent)' : 'transparent'}`, cursor: 'pointer', background: 'none', border: 'none', borderBottom: `2px solid ${tab === t ? 'var(--accent)' : 'transparent'}`, transition: 'all .15s' }}>
+                style={{ flex: 1, padding: '10px 0', ...mono, fontSize: 10, color: tab === t ? 'var(--accent)' : 'var(--t3)', letterSpacing: '.08em', textTransform: 'uppercase', cursor: 'pointer', background: 'none', border: 'none', borderBottom: `2px solid ${tab === t ? 'var(--accent)' : 'transparent'}`, transition: 'all .15s' }}>
                 {t.charAt(0).toUpperCase() + t.slice(1)}
               </button>
             ))}

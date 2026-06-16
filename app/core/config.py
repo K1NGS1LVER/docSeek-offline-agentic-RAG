@@ -18,7 +18,7 @@ INDEX_PATH = str(DATA_DIR / "my_index.faiss")
 MODEL_NAME = "all-mpnet-base-v2"
 EMBEDDING_DIM = 768  # Matches mpnet
 # MODEL_NAME = "all-MiniLM-L6-v2"
-# EMBEDDING_DIM = 384 
+# EMBEDDING_DIM = 384
 
 # Server settings
 HOST = "0.0.0.0"
@@ -31,6 +31,6 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # LLM Settings (Ollama)
 LLM_BASE_URL = "http://localhost:11434/v1"
-LLM_MODEL = "mistral"
+LLM_MODEL = "phi3:mini"
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 1024
