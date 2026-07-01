@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from contextlib import contextmanager
 from typing import List, Optional, Dict, Any
@@ -13,7 +14,7 @@ def get_db():
         conn.close()
 
 def init_db():
-    """Initialize SQLite database"""
+    """Initialize SQLite database and run idempotent migrations."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -22,20 +23,47 @@ def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT NOT NULL,
                 metadata TEXT,
+                source_file TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """
+        )
+        # Migration: add source_file to pre-existing tables.
+        cols = {row[1] for row in cursor.execute("PRAGMA table_info(documents)")}
+        if "source_file" not in cols:
+            cursor.execute("ALTER TABLE documents ADD COLUMN source_file TEXT")
+        # Backfill any NULL source_file from the metadata JSON.
+        rows = cursor.execute(
+            "SELECT id, metadata FROM documents WHERE source_file IS NULL AND metadata IS NOT NULL"
+        ).fetchall()
+        for row_id, meta in rows:
+            try:
+                sf = json.loads(meta).get("source_file")
+            except Exception:
+                sf = None
+            if sf:
+                cursor.execute(
+                    "UPDATE documents SET source_file = ? WHERE id = ?", (sf, row_id)
+                )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_documents_source_file ON documents(source_file)"
         )
         conn.commit()
     print(f"Database initialized at {DB_PATH}")
 
 def insert_document(content: str, metadata: Optional[str] = None) -> int:
-    """Insert document and return its ID"""
+    """Insert document and return its ID. Extracts source_file from metadata."""
+    source_file = None
+    if metadata:
+        try:
+            source_file = json.loads(metadata).get("source_file")
+        except Exception:
+            source_file = None
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO documents (content, metadata) VALUES (?, ?)",
-            (content, metadata),
+            "INSERT INTO documents (content, metadata, source_file) VALUES (?, ?, ?)",
+            (content, metadata, source_file),
         )
         doc_id = cursor.lastrowid
         conn.commit()
@@ -91,16 +119,12 @@ def get_all_documents() -> List[Dict[str, Any]]:
     return [{"id": row[0], "content": row[1], "metadata": row[2]} for row in rows]
 
 def fetch_chunks_by_source(source_file: str) -> List[Dict[str, Any]]:
-    """Fetch all chunks that share the same source_file in their metadata.
-    Uses a LIKE query on the JSON metadata string."""
-    # Escape any SQL LIKE wildcards in the source_file string
-    safe = source_file.replace("%", "\\%").replace("_", "\\_")
-    pattern = f'%"source_file": "{safe}"%'
+    """Fetch all chunks sharing a source_file, via the indexed column."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, content, metadata FROM documents WHERE metadata LIKE ? ESCAPE '\\'",
-            (pattern,),
+            "SELECT id, content, metadata FROM documents WHERE source_file = ?",
+            (source_file,),
         )
         rows = cursor.fetchall()
     return [{"id": row[0], "content": row[1], "metadata": row[2]} for row in rows]
