@@ -6,7 +6,7 @@ import threading
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, File, UploadFile
+from fastapi import FastAPI, HTTPException, Query, File, UploadFile, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from sse_starlette.sse import EventSourceResponse
@@ -23,6 +23,8 @@ from app.core.config import (
     INDEX_PATH,
     UPLOAD_DIR,
     MAX_UPLOAD_BYTES,
+    CORS_ORIGINS,
+    ADMIN_TOKEN,
 )
 from app.core import database, parsing
 from app.core.engine import VectorEngine
@@ -195,11 +197,17 @@ app = FastAPI(title="RAG Search System", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def require_admin(x_admin_token: Optional[str] = Header(None)):
+    """Gate for destructive endpoints. No-op when ADMIN_TOKEN is unset."""
+    if ADMIN_TOKEN and x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Admin token required")
 
 # ============================================================================
 # INGEST & SEARCH
@@ -993,7 +1001,7 @@ def get_stats():
 
 
 @app.delete("/reset")
-def reset_system():
+def reset_system(_: None = Depends(require_admin)):
     global engine
 
     if os.path.exists(DB_PATH):
@@ -1008,7 +1016,7 @@ def reset_system():
 
 
 @app.post("/rebuild")
-def rebuild_index():
+def rebuild_index(_: None = Depends(require_admin)):
     """Rebuild the FAISS index from all documents in the database"""
     count = _rebuild_index()
     return {"status": "success", "documents_indexed": count}

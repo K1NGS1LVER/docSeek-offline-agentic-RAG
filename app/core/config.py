@@ -39,3 +39,17 @@ LLM_BASE_URL = "http://localhost:11434/v1"
 LLM_MODEL = "phi3:mini"
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 1024
+
+# CORS: explicit origins (credentials cannot be combined with "*").
+# Override with CORS_ORIGINS env var (comma-separated).
+CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get(
+        "CORS_ORIGINS", "http://localhost:5173,http://localhost:3000"
+    ).split(",")
+    if o.strip()
+]
+
+# When set, destructive endpoints require the X-Admin-Token header to match.
+# Unset (None) = open, for frictionless local dev.
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN") or None
