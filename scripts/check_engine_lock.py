@@ -36,8 +36,7 @@ def main():
     added = eng.get_total_vectors() - start
     assert added == 80, f"Expected 80 new vectors, got {added}"
     # Clean up the junk ids we added
-    # TODO: uncomment after Task 7 is merged (remove_ids is added)
-    # eng.remove_ids([10_000_000 + b * 100 + i for b in range(4) for i in range(20)])
+    eng.remove_ids([10_000_000 + b * 100 + i for b in range(4) for i in range(20)])
     print("OK: engine lock holds under concurrent read/write")
 
 if __name__ == "__main__":

@@ -129,3 +129,12 @@ class VectorEngine:
         """Get count of vectors in index"""
         with self._lock:
             return self.index.ntotal
+
+    def remove_ids(self, doc_ids: list) -> int:
+        """Remove vectors by their DB ids. Returns count removed."""
+        if not doc_ids:
+            return 0
+        ids = np.array(doc_ids, dtype=np.int64)
+        with self._lock:
+            removed = self.index.remove_ids(ids)
+        return int(removed)

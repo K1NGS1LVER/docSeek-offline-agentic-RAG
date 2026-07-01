@@ -128,3 +128,20 @@ def fetch_chunks_by_source(source_file: str) -> List[Dict[str, Any]]:
         )
         rows = cursor.fetchall()
     return [{"id": row[0], "content": row[1], "metadata": row[2]} for row in rows]
+
+def delete_documents_by_source(source_file: str) -> List[int]:
+    """Delete all chunks for a source_file. Returns the deleted ids."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        ids = [
+            row[0]
+            for row in cursor.execute(
+                "SELECT id FROM documents WHERE source_file = ?", (source_file,)
+            )
+        ]
+        if ids:
+            cursor.execute(
+                "DELETE FROM documents WHERE source_file = ?", (source_file,)
+            )
+            conn.commit()
+    return ids

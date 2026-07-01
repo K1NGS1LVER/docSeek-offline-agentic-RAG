@@ -971,6 +971,18 @@ def list_documents():
     return list(files)
 
 
+@app.delete("/documents")
+def delete_document(
+    source_file: str = Query(..., description="source_file value to delete"),
+    _: None = Depends(require_admin),
+):
+    """Delete all chunks for a given source_file from both DB and index."""
+    ids = database.delete_documents_by_source(source_file)
+    removed = engine.remove_ids(ids) if ids else 0
+    engine.save()
+    return {"status": "success", "deleted": removed, "db_rows": len(ids)}
+
+
 @app.get("/ingest/status")
 def get_ingest_status():
     return {
