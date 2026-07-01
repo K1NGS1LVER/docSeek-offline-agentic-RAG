@@ -98,10 +98,6 @@ class VectorEngine:
                     ids = np.arange(start_id, start_id + vectors.shape[0], dtype=np.int64)
 
                 self.index.add_with_ids(vectors, ids)
-
-                # Auto-save every 50 vectors
-                if self.index.ntotal % 50 == 0:
-                    self.save()
         except Exception as e:
             logger.error(f"Failed to add {vectors.shape[0]} vectors to index: {e}")
             raise
