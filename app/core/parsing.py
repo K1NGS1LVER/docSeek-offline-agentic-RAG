@@ -2,8 +2,8 @@ import re
 from typing import List, Tuple
 from bs4 import BeautifulSoup
 
-CHUNK_SIZE = 300  # Characters per chunk
-CHUNK_OVERLAP = 50  # Overlap between chunks
+CHUNK_SIZE = 1000  # Characters per chunk (~200 tokens, well under mpnet's 384)
+CHUNK_OVERLAP = 150  # Overlap between chunks
 
 def chunk_text(
     text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
