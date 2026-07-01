@@ -1,4 +1,5 @@
 import os
+import pathlib
 import logging
 import json
 import threading
@@ -21,6 +22,7 @@ from app.core.config import (
     DB_PATH,
     INDEX_PATH,
     UPLOAD_DIR,
+    MAX_UPLOAD_BYTES,
 )
 from app.core import database, parsing
 from app.core.engine import VectorEngine
@@ -50,6 +52,19 @@ if not DOCX_AVAILABLE:
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+
+def _safe_upload_path(filename: str) -> tuple[str, pathlib.Path]:
+    """Strip any directory components from a client-supplied filename and
+    resolve it strictly inside UPLOAD_DIR. Raises 400 on empty/unsafe names."""
+    safe_name = os.path.basename(filename or "")
+    if not safe_name or safe_name in (".", ".."):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    dest = (pathlib.Path(UPLOAD_DIR) / safe_name).resolve()
+    upload_root = pathlib.Path(UPLOAD_DIR).resolve()
+    if upload_root not in dest.parents and dest != upload_root:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    return safe_name, dest
 
 
 def extract_text_from_docx(file_path: str) -> str:
@@ -199,15 +214,19 @@ async def upload_file(file: UploadFile = File(...)):
     start_time = time.time()
 
     try:
-        # Save the uploaded file
-        file_path = UPLOAD_DIR / file.filename
+        safe_name, file_path = _safe_upload_path(file.filename)
         content = await file.read()
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
+            )
 
         with open(file_path, "wb") as f:
             f.write(content)
 
         # Parse based on file extension
-        ext = os.path.splitext(file.filename)[1].lower()
+        ext = os.path.splitext(safe_name)[1].lower()
 
         # Validate file type
         supported_extensions = [".txt", ".md", ".markdown", ".html", ".htm", ".docx"]
@@ -244,7 +263,7 @@ async def upload_file(file: UploadFile = File(...)):
                 status_code=400, detail="No content could be extracted from file"
             )
 
-        logger.info(f"Processing {file.filename}: {len(chunks)} chunks to embed...")
+        logger.info(f"Processing {safe_name}: {len(chunks)} chunks to embed...")
 
         # BATCH EMBED all chunks at once (MUCH faster than one-by-one)
         chunk_texts = [chunk_text for chunk_text, _, _ in chunks]
@@ -266,7 +285,7 @@ async def upload_file(file: UploadFile = File(...)):
                     "source_file": str(file_path),
                     "chunk_index": i,
                     "total_chunks": len(chunks),
-                    "filename": file.filename,
+                    "filename": safe_name,
                     "start_char": start_char,
                     "end_char": end_char,
                 }
@@ -282,17 +301,19 @@ async def upload_file(file: UploadFile = File(...)):
         elapsed = time.time() - start_time
 
         logger.info(
-            f"✅ Successfully ingested {file.filename} ({len(chunks)} chunks) in {elapsed:.2f}s"
+            f"✅ Successfully ingested {safe_name} ({len(chunks)} chunks) in {elapsed:.2f}s"
         )
 
         return {
             "status": "success",
-            "filename": file.filename,
+            "filename": safe_name,
             "chunks": len(chunks),
             "doc_ids": doc_ids,
             "time_seconds": round(elapsed, 2),
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error uploading file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -310,15 +331,23 @@ async def upload_multiple_files(files: list[UploadFile] = File(...)):
 
     for file in files:
         try:
-            # Save the uploaded file
-            file_path = UPLOAD_DIR / file.filename
+            safe_name, file_path = _safe_upload_path(file.filename)
             content = await file.read()
+            if len(content) > MAX_UPLOAD_BYTES:
+                results.append(
+                    {
+                        "filename": safe_name,
+                        "status": "failed",
+                        "error": f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
+                    }
+                )
+                continue
 
             with open(file_path, "wb") as f:
                 f.write(content)
 
             # Parse based on file extension
-            ext = os.path.splitext(file.filename)[1].lower()
+            ext = os.path.splitext(safe_name)[1].lower()
 
             # Validate file type
             supported_extensions = [
@@ -332,7 +361,7 @@ async def upload_multiple_files(files: list[UploadFile] = File(...)):
             if ext not in supported_extensions:
                 results.append(
                     {
-                        "filename": file.filename,
+                        "filename": safe_name,
                         "status": "failed",
                         "error": f"Unsupported file type: {ext}",
                     }
@@ -355,7 +384,7 @@ async def upload_multiple_files(files: list[UploadFile] = File(...)):
             except Exception as decode_error:
                 results.append(
                     {
-                        "filename": file.filename,
+                        "filename": safe_name,
                         "status": "failed",
                         "error": f"Failed to decode: {str(decode_error)}",
                     }
@@ -368,7 +397,7 @@ async def upload_multiple_files(files: list[UploadFile] = File(...)):
             if not chunks:
                 results.append(
                     {
-                        "filename": file.filename,
+                        "filename": safe_name,
                         "status": "failed",
                         "error": "No content could be extracted",
                     }
@@ -389,7 +418,7 @@ async def upload_multiple_files(files: list[UploadFile] = File(...)):
                         "source_file": str(file_path),
                         "chunk_index": i,
                         "total_chunks": len(chunks),
-                        "filename": file.filename,
+                        "filename": safe_name,
                         "start_char": start_char,
                         "end_char": end_char,
                     }
@@ -403,10 +432,10 @@ async def upload_multiple_files(files: list[UploadFile] = File(...)):
 
             total_chunks += len(chunks)
             results.append(
-                {"filename": file.filename, "status": "success", "chunks": len(chunks)}
+                {"filename": safe_name, "status": "success", "chunks": len(chunks)}
             )
 
-            logger.info(f"✅ Processed {file.filename} ({len(chunks)} chunks)")
+            logger.info(f"✅ Processed {safe_name} ({len(chunks)} chunks)")
 
         except Exception as e:
             logger.error(f"Error processing {file.filename}: {str(e)}")

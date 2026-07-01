@@ -10,6 +10,11 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 UPLOAD_DIR = DATA_DIR / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+# Max accepted upload size (bytes). ponytail: read() still buffers in RAM;
+# true fix is streaming with a running size guard. Cap keeps a single request
+# from OOMing the process.
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+
 # File Paths
 DB_PATH = str(DATA_DIR / "docs.db")
 INDEX_PATH = str(DATA_DIR / "my_index.faiss")
