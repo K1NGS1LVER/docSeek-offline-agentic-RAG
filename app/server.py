@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from sse_starlette.sse import EventSourceResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 import uvicorn
 
@@ -249,7 +250,7 @@ async def upload_file(file: UploadFile = File(...)):
         chunk_texts = [chunk_text for chunk_text, _, _ in chunks]
 
         embed_start = time.time()
-        embeddings = engine.embed_batch(chunk_texts)
+        embeddings = await run_in_threadpool(engine.embed_batch, chunk_texts)
         embed_time = time.time() - embed_start
         logger.info(
             f"✅ Embedded {len(chunks)} chunks in {embed_time:.2f}s ({len(chunks) / embed_time:.0f} chunks/sec)"
@@ -376,7 +377,7 @@ async def upload_multiple_files(files: list[UploadFile] = File(...)):
 
             # Batch embed all chunks for this file
             chunk_texts = [chunk_text for chunk_text, _, _ in chunks]
-            embeddings = engine.embed_batch(chunk_texts)
+            embeddings = await run_in_threadpool(engine.embed_batch, chunk_texts)
 
             # Insert all chunks with their embeddings
             doc_ids = []
@@ -521,8 +522,8 @@ async def ask(request: AskRequest):
 
             return EventSourceResponse(empty_stream())
 
-        query_vector = engine.embed(request.query)
-        top_indices, scores = engine.search(query_vector, request.k)
+        query_vector = await run_in_threadpool(engine.embed, request.query)
+        top_indices, scores = await run_in_threadpool(engine.search, query_vector, request.k)
 
         valid_ids = [int(idx) for idx in top_indices if idx != -1]
         documents = database.fetch_documents_by_ids(valid_ids) if valid_ids else []
