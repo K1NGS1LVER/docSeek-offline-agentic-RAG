@@ -137,6 +137,7 @@ async def lifespan(app: FastAPI):
     database.init_db()
     engine = VectorEngine()
     llm = OllamaLLM()
+    await llm.warmup()
 
     # Auto-rebuild index if DB has documents but FAISS is empty
     db_count = database.get_document_count()

@@ -9,7 +9,7 @@ import logging
 # pyrefly: ignore [missing-import]
 from openai import AsyncOpenAI
 
-from .config import LLM_BASE_URL, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS
+from .config import LLM_BASE_URL, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_KEEP_ALIVE
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,19 @@ class OllamaLLM:
         )
         self.model = LLM_MODEL
         logger.info(f"LLM client initialized: {LLM_BASE_URL} / {self.model}")
+
+    async def warmup(self):
+        """Load the model into memory so the first real /ask is fast."""
+        try:
+            await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": "ok"}],
+                max_tokens=1,
+                extra_body={"keep_alive": LLM_KEEP_ALIVE},
+            )
+            logger.info(f"LLM warmed up: {self.model}")
+        except Exception as e:
+            logger.warning(f"LLM warmup skipped ({e}). Is Ollama running?")
 
     def build_context(self, search_results: list) -> str:
         """Format search results into a context block for the LLM prompt."""
@@ -73,6 +86,7 @@ class OllamaLLM:
                 temperature=LLM_TEMPERATURE,
                 max_tokens=LLM_MAX_TOKENS,
                 stream=True,
+                extra_body={"keep_alive": LLM_KEEP_ALIVE},
             )
 
             async for chunk in stream:

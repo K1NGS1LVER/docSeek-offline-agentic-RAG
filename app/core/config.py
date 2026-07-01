@@ -40,6 +40,9 @@ LLM_MODEL = "phi3:mini"
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 1024
 
+# Ollama keep_alive: how long the model stays resident. -1 = never unload.
+LLM_KEEP_ALIVE = -1
+
 # CORS: explicit origins (credentials cannot be combined with "*").
 # Override with CORS_ORIGINS env var (comma-separated).
 CORS_ORIGINS = [
