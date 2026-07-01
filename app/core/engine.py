@@ -1,5 +1,6 @@
 import os
 import logging
+import threading
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -51,6 +52,11 @@ class VectorEngine:
             base_index = faiss.IndexFlatIP(self.dimension)
             self.index = faiss.IndexIDMap(base_index)
 
+        # Guards all index mutate/search/save. Reentrant so save() can be
+        # called from inside a locked add. FAISS index objects are not
+        # thread-safe and the GitHub ingest worker runs in a daemon thread.
+        self._lock = threading.RLock()
+
     def embed(self, text: str) -> np.ndarray:
         """Generate normalized embedding for text"""
         try:
@@ -81,20 +87,21 @@ class VectorEngine:
         try:
             if vectors.ndim == 1:
                 vectors = vectors.reshape(1, -1)
-            
+
             vectors = vectors.astype("float32")
-            
-            if doc_ids is not None:
-                ids = np.array(doc_ids, dtype=np.int64)
-            else:
-                start_id = self.index.ntotal + 1
-                ids = np.arange(start_id, start_id + vectors.shape[0], dtype=np.int64)
-            
-            self.index.add_with_ids(vectors, ids)
-            
-            # Auto-save every 50 vectors
-            if self.index.ntotal % 50 == 0:
-                self.save()
+
+            with self._lock:
+                if doc_ids is not None:
+                    ids = np.array(doc_ids, dtype=np.int64)
+                else:
+                    start_id = self.index.ntotal + 1
+                    ids = np.arange(start_id, start_id + vectors.shape[0], dtype=np.int64)
+
+                self.index.add_with_ids(vectors, ids)
+
+                # Auto-save every 50 vectors
+                if self.index.ntotal % 50 == 0:
+                    self.save()
         except Exception as e:
             logger.error(f"Failed to add {vectors.shape[0]} vectors to index: {e}")
             raise
@@ -103,11 +110,11 @@ class VectorEngine:
         """Search for top-k nearest neighbors. Returns (doc_ids, scores)."""
         try:
             query_vector = query_vector.astype("float32")
-            # Don't request more results than we have vectors
-            actual_k = min(k, self.index.ntotal) if self.index.ntotal > 0 else 0
-            if actual_k == 0:
-                return np.array([]), np.array([])
-            distances, indices = self.index.search(query_vector, actual_k)
+            with self._lock:
+                actual_k = min(k, self.index.ntotal) if self.index.ntotal > 0 else 0
+                if actual_k == 0:
+                    return np.array([]), np.array([])
+                distances, indices = self.index.search(query_vector, actual_k)
             return indices[0], distances[0]
         except Exception as e:
             logger.error(f"Search failed (k={k}): {e}")
@@ -116,11 +123,13 @@ class VectorEngine:
     def save(self):
         """Persist index to disk"""
         try:
-            faiss.write_index(self.index, self.index_path)
+            with self._lock:
+                faiss.write_index(self.index, self.index_path)
             logger.info(f"Index saved to {self.index_path}")
         except Exception as e:
             logger.error(f"Failed to save index: {e}")
 
     def get_total_vectors(self) -> int:
         """Get count of vectors in index"""
-        return self.index.ntotal
+        with self._lock:
+            return self.index.ntotal
