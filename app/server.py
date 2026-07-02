@@ -484,13 +484,21 @@ def ingest_document(request: IngestRequest):
 SIMILARITY_THRESHOLD = 0.20  # Minimum cosine similarity score to return a result
 
 
-@app.post("/search", response_model=List[SearchResult])
-def search(request: SearchRequest):
+def _retrieve_and_filter(query: str, k: int) -> List[Dict[str, Any]]:
+    """Shared retrieval + relevance-filtering logic for /search and /ask.
+
+    Runs dense search (and, if enabled, keyword search + RRF fusion), then
+    drops weak dense-only hits below SIMILARITY_THRESHOLD -- unless the hit
+    is also a keyword match (hybrid only), or is a keyword-only hit (no
+    dense score at all), in which case it's kept regardless of score.
+
+    Returns a list of dicts: {"id", "score", "content", "source"}.
+    """
     if engine.get_total_vectors() == 0:
         return []
 
-    query_vector = engine.embed(request.query)
-    top_indices, scores = engine.search(query_vector, request.k)
+    query_vector = engine.embed(query)
+    top_indices, scores = engine.search(query_vector, k)
 
     # Dense scores keyed by id (used for the returned score + threshold).
     dense_scores = {
@@ -501,14 +509,11 @@ def search(request: SearchRequest):
 
     if HYBRID_SEARCH:
         dense_ids = [int(i) for i in top_indices if i != -1]
-        kw_ids = database.keyword_search(request.query, request.k)
-        ordered_ids = reciprocal_rank_fusion([dense_ids, kw_ids], k=RRF_K)[: request.k]
+        kw_ids = database.keyword_search(query, k)
+        ordered_ids = reciprocal_rank_fusion([dense_ids, kw_ids], k=RRF_K)[:k]
     else:
         ordered_ids = [int(i) for i in top_indices if i != -1]
 
-    logger.info(
-        f"Search '{request.query}' hybrid={HYBRID_SEARCH} -> {len(ordered_ids)} candidates"
-    )
     if not ordered_ids:
         return []
 
@@ -528,7 +533,7 @@ def search(request: SearchRequest):
             score = 0.0
         elif score < SIMILARITY_THRESHOLD:
             # Drop weak dense-only hits, but keep if keyword also matched (hybrid only).
-            if not HYBRID_SEARCH or doc_id not in database.keyword_search(request.query, request.k):
+            if not HYBRID_SEARCH or doc_id not in database.keyword_search(query, k):
                 continue
         source_data = None
         if doc.get("metadata"):
@@ -537,9 +542,18 @@ def search(request: SearchRequest):
             except Exception:
                 source_data = {"raw": doc["metadata"]}
         results.append(
-            SearchResult(id=doc_id, score=score, content=doc["content"], source=source_data)
+            {"id": doc_id, "score": score, "content": doc["content"], "source": source_data}
         )
     return results
+
+
+@app.post("/search", response_model=List[SearchResult])
+def search(request: SearchRequest):
+    results = _retrieve_and_filter(request.query, request.k)
+    logger.info(
+        f"Search '{request.query}' hybrid={HYBRID_SEARCH} -> {len(results)} results"
+    )
+    return [SearchResult(**r) for r in results]
 
 
 # ============================================================================
@@ -567,37 +581,11 @@ async def ask(request: AskRequest):
 
             return EventSourceResponse(empty_stream())
 
-        query_vector = await run_in_threadpool(engine.embed, request.query)
-        top_indices, scores = await run_in_threadpool(engine.search, query_vector, request.k)
-
-        dense_scores = {
-            int(idx): float(sc) for idx, sc in zip(top_indices, scores) if idx != -1
-        }
-        if HYBRID_SEARCH:
-            dense_ids = [int(i) for i in top_indices if i != -1]
-            kw_ids = database.keyword_search(request.query, request.k)
-            ordered_ids = reciprocal_rank_fusion([dense_ids, kw_ids], k=RRF_K)[: request.k]
-        else:
-            ordered_ids = [int(i) for i in top_indices if i != -1]
-
-        documents = database.fetch_documents_by_ids(ordered_ids) if ordered_ids else []
-        doc_map = {doc["id"]: doc for doc in documents}
-
-        search_results = []
-        for doc_id in ordered_ids:
-            doc = doc_map.get(doc_id)
-            if doc is None:
-                continue
-            score = dense_scores.get(doc_id, 0.0)
-            source_data = None
-            if doc.get("metadata"):
-                try:
-                    source_data = json.loads(doc["metadata"])
-                except Exception:
-                    source_data = {"raw": doc["metadata"]}
-            search_results.append(
-                {"content": doc["content"], "score": score, "source": source_data}
-            )
+        results = await run_in_threadpool(_retrieve_and_filter, request.query, request.k)
+        search_results = [
+            {"content": r["content"], "score": r["score"], "source": r["source"]}
+            for r in results
+        ]
 
         if not search_results:
 
