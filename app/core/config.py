@@ -56,3 +56,7 @@ CORS_ORIGINS = [
 # When set, destructive endpoints require the X-Admin-Token header to match.
 # Unset (None) = open, for frictionless local dev.
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN") or None
+
+# Hybrid retrieval: fuse dense (FAISS) and keyword (FTS5/BM25) results.
+HYBRID_SEARCH = True
+RRF_K = 60  # Reciprocal Rank Fusion constant (standard default)

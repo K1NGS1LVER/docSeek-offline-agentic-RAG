@@ -25,10 +25,13 @@ from app.core.config import (
     MAX_UPLOAD_BYTES,
     CORS_ORIGINS,
     ADMIN_TOKEN,
+    HYBRID_SEARCH,
+    RRF_K,
 )
 from app.core import database, parsing
 from app.core.engine import VectorEngine
 from app.core.llm import OllamaLLM
+from app.core.fusion import reciprocal_rank_fusion
 
 try:
     from docx import Document
@@ -489,49 +492,53 @@ def search(request: SearchRequest):
     query_vector = engine.embed(request.query)
     top_indices, scores = engine.search(query_vector, request.k)
 
-    logger.info(
-        f"Search '{request.query}' → top scores: {[f'{s:.4f}' for s in scores]}"
-    )
+    # Dense scores keyed by id (used for the returned score + threshold).
+    dense_scores = {
+        int(idx): float(sc)
+        for idx, sc in zip(top_indices, scores)
+        if idx != -1
+    }
 
-    # top_indices now contains actual DB IDs (from IndexIDMap)
-    valid_ids = [int(idx) for idx in top_indices if idx != -1]
-    if not valid_ids:
+    if HYBRID_SEARCH:
+        dense_ids = [int(i) for i in top_indices if i != -1]
+        kw_ids = database.keyword_search(request.query, request.k)
+        ordered_ids = reciprocal_rank_fusion([dense_ids, kw_ids], k=RRF_K)[: request.k]
+    else:
+        ordered_ids = [int(i) for i in top_indices if i != -1]
+
+    logger.info(
+        f"Search '{request.query}' hybrid={HYBRID_SEARCH} -> {len(ordered_ids)} candidates"
+    )
+    if not ordered_ids:
         return []
 
-    documents = database.fetch_documents_by_ids(valid_ids)
+    documents = database.fetch_documents_by_ids(ordered_ids)
     doc_map = {doc["id"]: doc for doc in documents}
 
     results = []
-    for idx, score in zip(top_indices, scores):
-        if idx == -1:
+    for doc_id in ordered_ids:
+        doc = doc_map.get(doc_id)
+        if doc is None:
             continue
-
-        # Skip results below the similarity threshold
-        if float(score) < SIMILARITY_THRESHOLD:
-            continue
-
-        doc_id = int(idx)
-        if doc_id not in doc_map:
-            continue
-
-        doc = doc_map[doc_id]
+        score = dense_scores.get(doc_id)
+        # Keyword-only hits have no dense score; keep them (they matched terms)
+        # but give them a floor so they clear nothing they shouldn't. We surface
+        # the dense score when we have it, else 0.0.
+        if score is None:
+            score = 0.0
+        elif score < SIMILARITY_THRESHOLD:
+            # Drop weak dense-only hits, but keep if keyword also matched.
+            if doc_id not in database.keyword_search(request.query, request.k):
+                continue
         source_data = None
-
         if doc.get("metadata"):
             try:
                 source_data = json.loads(doc["metadata"])
             except Exception:
                 source_data = {"raw": doc["metadata"]}
-
         results.append(
-            SearchResult(
-                id=doc["id"],
-                score=float(score),
-                content=doc["content"],
-                source=source_data,
-            )
+            SearchResult(id=doc_id, score=score, content=doc["content"], source=source_data)
         )
-
     return results
 
 
@@ -563,19 +570,25 @@ async def ask(request: AskRequest):
         query_vector = await run_in_threadpool(engine.embed, request.query)
         top_indices, scores = await run_in_threadpool(engine.search, query_vector, request.k)
 
-        valid_ids = [int(idx) for idx in top_indices if idx != -1]
-        documents = database.fetch_documents_by_ids(valid_ids) if valid_ids else []
+        dense_scores = {
+            int(idx): float(sc) for idx, sc in zip(top_indices, scores) if idx != -1
+        }
+        if HYBRID_SEARCH:
+            dense_ids = [int(i) for i in top_indices if i != -1]
+            kw_ids = database.keyword_search(request.query, request.k)
+            ordered_ids = reciprocal_rank_fusion([dense_ids, kw_ids], k=RRF_K)[: request.k]
+        else:
+            ordered_ids = [int(i) for i in top_indices if i != -1]
+
+        documents = database.fetch_documents_by_ids(ordered_ids) if ordered_ids else []
         doc_map = {doc["id"]: doc for doc in documents}
 
-        # Build search results for LLM context
         search_results = []
-        for idx, score in zip(top_indices, scores):
-            if idx == -1 or float(score) < SIMILARITY_THRESHOLD:
+        for doc_id in ordered_ids:
+            doc = doc_map.get(doc_id)
+            if doc is None:
                 continue
-            doc_id = int(idx)
-            if doc_id not in doc_map:
-                continue
-            doc = doc_map[doc_id]
+            score = dense_scores.get(doc_id, 0.0)
             source_data = None
             if doc.get("metadata"):
                 try:
@@ -583,11 +596,7 @@ async def ask(request: AskRequest):
                 except Exception:
                     source_data = {"raw": doc["metadata"]}
             search_results.append(
-                {
-                    "content": doc["content"],
-                    "score": float(score),
-                    "source": source_data,
-                }
+                {"content": doc["content"], "score": score, "source": source_data}
             )
 
         if not search_results:

@@ -48,6 +48,43 @@ def init_db():
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_documents_source_file ON documents(source_file)"
         )
+        # FTS5 full-text mirror of documents.content for BM25 keyword search.
+        cursor.execute(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts
+            USING fts5(content, content='documents', content_rowid='id')
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
+                INSERT INTO documents_fts(rowid, content) VALUES (new.id, new.content);
+            END
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents BEGIN
+                INSERT INTO documents_fts(documents_fts, rowid, content)
+                VALUES ('delete', old.id, old.content);
+            END
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents BEGIN
+                INSERT INTO documents_fts(documents_fts, rowid, content)
+                VALUES ('delete', old.id, old.content);
+                INSERT INTO documents_fts(rowid, content) VALUES (new.id, new.content);
+            END
+            """
+        )
+        # Backfill FTS for rows that predate the virtual table.
+        cursor.execute("SELECT count(*) FROM documents_fts")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute(
+                "INSERT INTO documents_fts(rowid, content) SELECT id, content FROM documents"
+            )
         conn.commit()
     print(f"Database initialized at {DB_PATH}")
 
@@ -145,3 +182,22 @@ def delete_documents_by_source(source_file: str) -> List[int]:
             )
             conn.commit()
     return ids
+
+def keyword_search(query: str, k: int) -> List[int]:
+    """BM25 keyword search over content via FTS5. Returns DB ids, best first."""
+    if not query.strip():
+        return []
+    # FTS5 MATCH needs a query; quote the whole thing to treat it as a phrase
+    # of terms and avoid syntax errors on punctuation.
+    match = '"' + query.replace('"', '""') + '"'
+    with get_db() as conn:
+        cursor = conn.cursor()
+        try:
+            rows = cursor.execute(
+                "SELECT rowid FROM documents_fts WHERE documents_fts MATCH ? "
+                "ORDER BY bm25(documents_fts) LIMIT ?",
+                (match, k),
+            ).fetchall()
+        except Exception:
+            return []
+    return [row[0] for row in rows]
