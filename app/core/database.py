@@ -187,9 +187,13 @@ def keyword_search(query: str, k: int) -> List[int]:
     """BM25 keyword search over content via FTS5. Returns DB ids, best first."""
     if not query.strip():
         return []
-    # FTS5 MATCH needs a query; quote the whole thing to treat it as a phrase
-    # of terms and avoid syntax errors on punctuation.
-    match = '"' + query.replace('"', '""') + '"'
+    # Quote each token individually (not the whole query as one phrase) so
+    # FTS5 ANDs independent terms together instead of requiring an exact
+    # adjacent phrase match. Per-token quoting also escapes punctuation that
+    # would otherwise break FTS5 query syntax.
+    match = " ".join(
+        '"' + token.replace('"', '""') + '"' for token in query.split() if token
+    )
     with get_db() as conn:
         cursor = conn.cursor()
         try:

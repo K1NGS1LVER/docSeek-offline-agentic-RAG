@@ -20,6 +20,7 @@ def main():
     assert removed == 1, f"expected 1 removed, got {removed}"
     assert eng.get_total_vectors() == before, "vector count did not return to baseline"
     assert database.fetch_chunks_by_source("del_test.txt") == [], "DB rows remain"
+    assert database.keyword_search("delete me", 5) == [], "FTS5 mirror not purged"
     print("OK: delete removes rows from DB and vectors from index")
 
 if __name__ == "__main__":

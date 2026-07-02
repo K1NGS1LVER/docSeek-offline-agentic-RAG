@@ -23,5 +23,7 @@ def main():
     assert row[0] == "sc_test.txt", f"source_file not populated: {row}"
     print("OK: source_file column populated and queryable")
 
+    database.delete_documents_by_source("sc_test.txt")
+
 if __name__ == "__main__":
     main()
