@@ -527,8 +527,8 @@ def search(request: SearchRequest):
         if score is None:
             score = 0.0
         elif score < SIMILARITY_THRESHOLD:
-            # Drop weak dense-only hits, but keep if keyword also matched.
-            if doc_id not in database.keyword_search(request.query, request.k):
+            # Drop weak dense-only hits, but keep if keyword also matched (hybrid only).
+            if not HYBRID_SEARCH or doc_id not in database.keyword_search(request.query, request.k):
                 continue
         source_data = None
         if doc.get("metadata"):
