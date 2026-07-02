@@ -26,7 +26,8 @@ A high-performance **Retrieval-Augmented Generation (RAG)** system built with **
 │   ├── docs.db
 │   └── my_index.faiss
 ├── scripts/            # Utility scripts
-├── run_server.sh       # Startup helper script
+├── run.sh              # Start backend + frontend together
+├── run_server.sh       # Backend-only startup helper script
 └── .venv/              # Python Virtual Environment
 ```
 
@@ -49,7 +50,14 @@ A high-performance **Retrieval-Augmented Generation (RAG)** system built with **
 ## 🏁 Usage
 
 ### 1. Start the Server
-The server handles embedding generation and search requests.
+
+Start backend + frontend together (output prefixed `[backend]`/`[frontend]`):
+
+```bash
+./run.sh
+```
+
+Or backend only:
 
 ```bash
 ./run_server.sh
