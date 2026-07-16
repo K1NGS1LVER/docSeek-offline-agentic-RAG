@@ -1,15 +1,19 @@
-# RAG Search System
+# docSeek: Local-First Agentic RAG
 
-A high-performance **Retrieval-Augmented Generation (RAG)** system built with **FastAPI**, **FAISS**, **Sentence Transformers**, and **SQLite**. This system allows you to ingest textual documentation and perform semantic vector searches against it.
+A privacy-first, fully local **agentic Retrieval-Augmented Generation (RAG)** system built with **FastAPI**, **FAISS**, **Sentence Transformers**, and **SQLite**.
+All retrieval, reranking, and LLM reasoning run on your device.
+Nothing leaves your machine (model weights are downloaded once from HuggingFace, then everything is offline).
 
 ## 🚀 Features
 
-*   **Dense Vector Search:** Uses `all-mpnet-base-v2` (state-of-the-art) for high-quality semantic embeddings.
-*   **FAISS Indexing:** Fast similarity search using Facebook AI Similarity Search.
-*   **Persistent Storage:** SQLite for document content and FAISS for vector data.
-*   **REST API:** Fully featured API built with FastAPI.
-*   **Interactive Docs:** Auto-generated Swagger UI for easy testing.
-*   **Modular Design:** Clean separation of concerns (Core, Engine, DB).
+*   **Agentic retrieval loop:** a local LLM agent plans each query (dynamic top-k, query rewriting, sub-query decomposition), decides whether to rerank, grades the retrieved evidence, and re-loops with a reformulated query when the evidence is weak (CRAG-style).
+*   **Hybrid search:** dense vectors (FAISS, `all-mpnet-base-v2`) fused with BM25 keyword search (SQLite FTS5) via Reciprocal Rank Fusion.
+*   **Local cross-encoder reranking:** `ms-marco-MiniLM-L-6-v2` rescores candidates on-device when the agent judges precision matters.
+*   **Chunking strategies:** recursive (character/sentence-boundary), semantic (embedding-based topic-shift detection), or auto (per-document strategy selection).
+*   **Transparent decisions:** every agent step streams to the UI as a trace event, so you can watch it plan, retrieve, rerank, grade, and loop.
+*   **Graceful degradation:** if Ollama is down, deterministic heuristics take over and the system falls back to plain hybrid retrieval.
+*   **Persistent storage:** SQLite for document content and FAISS for vector data.
+*   **REST API:** fully featured API built with FastAPI, with auto-generated Swagger UI.
 
 ## 📂 Project Structure
 
@@ -44,7 +48,7 @@ A high-performance **Retrieval-Augmented Generation (RAG)** system built with **
 3.  **Install Dependencies:**
 
     ```bash
-    pip install fastapi uvicorn sentence-transformers faiss-cpu numpy sqlite3 requests beautifulsoup4
+    pip install fastapi uvicorn sentence-transformers faiss-cpu numpy requests beautifulsoup4 openai sse-starlette python-docx python-multipart pytest
     ```
 
 ## 🏁 Usage
@@ -86,19 +90,67 @@ You can search using the API or the provided Swagger UI.
 ```bash
 curl -X POST "http://localhost:8000/search" \
      -H "Content-Type: application/json" \
-     -d '{"query": "How do I use dependency injection?", "k": 3}'
+     -d '{"query": "How do I use dependency injection?", "k": 3, "rerank": true}'
 ```
+
+`rerank` is optional.
+When true, the server over-fetches candidates and rescores them with the local cross-encoder before returning the top k.
 
 **Via Swagger UI:**
 1.  Go to `http://localhost:8000/docs`
 2.  Click on `/search` -> **Try it out**
 3.  Enter your query and execute.
 
+### 4. Ask (agentic RAG)
+
+`POST /ask` runs the full agentic pipeline and streams the answer over SSE.
+
+```bash
+curl -N -X POST "http://localhost:8000/ask" \
+     -H "Content-Type: application/json" \
+     -d '{"query": "How does ingestion work?"}'
+```
+
+*   Omit `k` (or send `null`) to let the agent choose it per query.
+*   Send `"agentic": false` to skip the agent and use plain hybrid retrieval.
+*   The stream contains typed events: `trace` (agent decisions), `sources` (retrieved chunks), and unnamed events carrying JSON-encoded answer text deltas.
+
+Requires a local [Ollama](https://ollama.com) server with the configured model pulled (`ollama pull phi3:mini`).
+Without Ollama, retrieval still works with heuristic planning, but answer generation is unavailable.
+
+### 5. Chunking strategies
+
+Uploads accept an optional `chunking_strategy` form field: `auto` (default), `recursive`, or `semantic`.
+
+```bash
+curl -X POST "http://localhost:8000/upload" \
+     -F "file=@my_doc.md" -F "chunking_strategy=semantic"
+```
+
+*   `recursive` splits on a character budget at sentence/paragraph boundaries.
+*   `semantic` embeds sentences with the local model and places chunk boundaries at topic shifts.
+*   `auto` profiles each document (length, code density, sentence count) and picks a strategy per document.
+
 ## ⚙️ Configuration
 You can adjust settings in `app/core/config.py`:
 *   **MODEL_NAME:** Change embedding model (e.g., `all-MiniLM-L6-v2` for speed).
 *   **EMBEDDING_DIM:** Update dimension if you change the model.
 *   **HOST/PORT:** Server binding.
+*   **AGENTIC_RAG:** Master switch for the agentic /ask pipeline.
+*   **RERANK_MODEL / RERANK_CANDIDATE_FACTOR:** Local cross-encoder and its over-fetch multiplier.
+*   **MAX_AGENT_LOOPS / AGENT_MIN_K / AGENT_MAX_K:** Bounds for the agent's retry loop and dynamic top-k.
+*   **CHUNKING_STRATEGY:** Default ingestion chunking strategy (`auto`, `recursive`, or `semantic`).
+*   **LLM_MODEL / LLM_BASE_URL:** Local Ollama model used for planning, grading, and answers.
+
+## ✅ Testing
+
+```bash
+.venv/bin/python -m pytest tests/e2e
+```
+
+The end-to-end suite boots a real server against an isolated temp data directory and exercises ingestion, hybrid search, reranking, the agentic ask pipeline (SSE trace/sources/answer events), document view, deletion, and index rebuild over HTTP.
+Your real `data/` directory is never touched.
+The suite passes with or without Ollama running (agent decisions fall back to heuristics).
 
 ## 🧹 Maintenance
 *   **Reset System:** Send a DELETE request to `/reset` to clear the DB and Index.
