@@ -6,7 +6,7 @@ import threading
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, File, UploadFile, Header, Depends
+from fastapi import FastAPI, HTTPException, Query, File, Form, UploadFile, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from sse_starlette.sse import EventSourceResponse
@@ -27,11 +27,16 @@ from app.core.config import (
     ADMIN_TOKEN,
     HYBRID_SEARCH,
     RRF_K,
+    AGENTIC_RAG,
+    RERANK_MODEL,
+    RERANK_CANDIDATE_FACTOR,
+    CHUNKING_STRATEGY,
 )
-from app.core import database, parsing
+from app.core import database, parsing, chunking, reranker
 from app.core.engine import VectorEngine
 from app.core.llm import OllamaLLM
 from app.core.fusion import reciprocal_rank_fusion
+from app.core.agent import RetrievalAgent
 
 try:
     from docx import Document
@@ -72,6 +77,23 @@ def _safe_upload_path(filename: str) -> tuple[str, pathlib.Path]:
     return safe_name, dest
 
 
+def _chunk_with_strategy(
+    text_content: str, strategy: Optional[str]
+) -> tuple[list, str]:
+    """Chunk text with the requested (or configured default) strategy.
+
+    Returns (chunks, strategy_used). Semantic chunking embeds sentences with
+    the local model; "auto" picks a strategy per document.
+    """
+    resolved = (strategy or CHUNKING_STRATEGY).strip().lower()
+    if resolved not in chunking.STRATEGIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown chunking strategy: {resolved}. Supported: {', '.join(chunking.STRATEGIES)}",
+        )
+    return chunking.chunk_document(text_content, resolved, embed_fn=engine.embed_batch)
+
+
 def extract_text_from_docx(file_path: str) -> str:
     """Extract text from a .docx file"""
     if not DOCX_AVAILABLE:
@@ -105,6 +127,7 @@ class IngestRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str
     k: int = 5
+    rerank: bool = False  # cross-encoder rescoring of an over-fetched candidate set
 
 
 class SearchResult(BaseModel):
@@ -112,6 +135,7 @@ class SearchResult(BaseModel):
     score: float
     content: str
     source: Optional[Dict[str, Any]] = None
+    rerank_score: Optional[float] = None
 
 
 class DocumentViewResponse(BaseModel):
@@ -219,7 +243,10 @@ def require_admin(x_admin_token: Optional[str] = Header(None)):
 
 
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    chunking_strategy: Optional[str] = Form(None),
+):
     """Upload and ingest a single document file (optimized with batch embedding)"""
     import time
 
@@ -267,15 +294,20 @@ async def upload_file(file: UploadFile = File(...)):
                 status_code=400, detail=f"Failed to extract text from file: {str(e)}"
             )
 
-        # Chunk the content (returns tuples of (text, start_char, end_char))
-        chunks = parsing.chunk_text(text_content)
+        # Chunk the content (returns tuples of (text, start_char, end_char)).
+        # Run in a threadpool: semantic chunking embeds sentences (CPU-heavy).
+        chunks, strategy_used = await run_in_threadpool(
+            _chunk_with_strategy, text_content, chunking_strategy
+        )
 
         if not chunks:
             raise HTTPException(
                 status_code=400, detail="No content could be extracted from file"
             )
 
-        logger.info(f"Processing {safe_name}: {len(chunks)} chunks to embed...")
+        logger.info(
+            f"Processing {safe_name}: {len(chunks)} chunks to embed ({strategy_used} chunking)..."
+        )
 
         # BATCH EMBED all chunks at once (MUCH faster than one-by-one)
         chunk_texts = [chunk_text for chunk_text, _, _ in chunks]
@@ -300,6 +332,7 @@ async def upload_file(file: UploadFile = File(...)):
                     "filename": safe_name,
                     "start_char": start_char,
                     "end_char": end_char,
+                    "chunking": strategy_used,
                 }
             )
 
@@ -320,6 +353,7 @@ async def upload_file(file: UploadFile = File(...)):
             "status": "success",
             "filename": safe_name,
             "chunks": len(chunks),
+            "chunking": strategy_used,
             "doc_ids": doc_ids,
             "time_seconds": round(elapsed, 2),
         }
@@ -332,7 +366,10 @@ async def upload_file(file: UploadFile = File(...)):
 
 
 @app.post("/upload-multiple")
-async def upload_multiple_files(files: list[UploadFile] = File(...)):
+async def upload_multiple_files(
+    files: list[UploadFile] = File(...),
+    chunking_strategy: Optional[str] = Form(None),
+):
     """Upload and ingest multiple documents at once (optimized batch processing)"""
     import time
 
@@ -404,7 +441,9 @@ async def upload_multiple_files(files: list[UploadFile] = File(...)):
                 continue
 
             # Chunk the content
-            chunks = parsing.chunk_text(text_content)
+            chunks, strategy_used = await run_in_threadpool(
+                _chunk_with_strategy, text_content, chunking_strategy
+            )
 
             if not chunks:
                 results.append(
@@ -433,6 +472,7 @@ async def upload_multiple_files(files: list[UploadFile] = File(...)):
                         "filename": safe_name,
                         "start_char": start_char,
                         "end_char": end_char,
+                        "chunking": strategy_used,
                     }
                 )
 
@@ -444,7 +484,12 @@ async def upload_multiple_files(files: list[UploadFile] = File(...)):
 
             total_chunks += len(chunks)
             results.append(
-                {"filename": safe_name, "status": "success", "chunks": len(chunks)}
+                {
+                    "filename": safe_name,
+                    "status": "success",
+                    "chunks": len(chunks),
+                    "chunking": strategy_used,
+                }
             )
 
             logger.info(f"✅ Processed {safe_name} ({len(chunks)} chunks)")
@@ -549,9 +594,16 @@ def _retrieve_and_filter(query: str, k: int) -> List[Dict[str, Any]]:
 
 @app.post("/search", response_model=List[SearchResult])
 def search(request: SearchRequest):
-    results = _retrieve_and_filter(request.query, request.k)
+    if request.rerank:
+        # Over-fetch candidates, rescore with the local cross-encoder, cut to k.
+        fetch_k = min(request.k * RERANK_CANDIDATE_FACTOR, 30)
+        results = _retrieve_and_filter(request.query, fetch_k)
+        results = reranker.rerank(request.query, results)[: request.k]
+    else:
+        results = _retrieve_and_filter(request.query, request.k)
     logger.info(
-        f"Search '{request.query}' hybrid={HYBRID_SEARCH} -> {len(results)} results"
+        f"Search '{request.query}' hybrid={HYBRID_SEARCH} rerank={request.rerank} "
+        f"-> {len(results)} results"
     )
     return [SearchResult(**r) for r in results]
 
@@ -563,64 +615,76 @@ def search(request: SearchRequest):
 
 class AskRequest(BaseModel):
     query: str
-    k: int = 3
+    # None lets the agent pick k dynamically (agentic) / defaults to 3 (simple).
+    k: Optional[int] = None
+    # None -> config default (AGENTIC_RAG). False forces plain hybrid retrieval.
+    agentic: Optional[bool] = None
 
 
 @app.post("/ask")
 async def ask(request: AskRequest):
-    """RAG endpoint: retrieve context from vector DB, then stream an LLM answer."""
+    """Agentic RAG endpoint, streamed over SSE with typed events:
 
-    try:
-        # 1. Retrieve relevant chunks (reuse search logic)
-        if engine.get_total_vectors() == 0:
+    - event "trace":   agent decision steps (plan / retrieve / rerank / grade / loop)
+    - event "sources": the final retrieved chunks used as context
+    - default events:  JSON-encoded answer text deltas (unchanged framing)
+    """
+    use_agent = AGENTIC_RAG if request.agentic is None else request.agentic
 
-            async def empty_stream():
-                yield json.dumps(
+    async def event_stream():
+        try:
+            if engine.get_total_vectors() == 0:
+                yield {"data": json.dumps(
                     "No documents have been uploaded yet. Please upload some documents first."
+                )}
+                return
+
+            if use_agent:
+                agent = RetrievalAgent(llm=llm, retrieve_fn=_retrieve_and_filter)
+                results = []
+                async for ev in agent.run(request.query, user_k=request.k):
+                    if ev["type"] == "trace":
+                        yield {"event": "trace", "data": json.dumps(ev)}
+                    elif ev["type"] == "results":
+                        results = ev["results"]
+            else:
+                results = await run_in_threadpool(
+                    _retrieve_and_filter, request.query, request.k or 3
                 )
 
-            return EventSourceResponse(empty_stream())
+            search_results = [
+                {
+                    "id": r["id"],
+                    "content": r["content"],
+                    "score": r["score"],
+                    "rerank_score": r.get("rerank_score"),
+                    "source": r["source"],
+                }
+                for r in results
+            ]
+            yield {"event": "sources", "data": json.dumps(search_results)}
 
-        results = await run_in_threadpool(_retrieve_and_filter, request.query, request.k)
-        search_results = [
-            {"content": r["content"], "score": r["score"], "source": r["source"]}
-            for r in results
-        ]
-
-        if not search_results:
-
-            async def no_results_stream():
-                yield json.dumps(
+            if not search_results:
+                yield {"data": json.dumps(
                     "I couldn't find any relevant information in the uploaded documents for your query."
-                )
+                )}
+                return
 
-            return EventSourceResponse(no_results_stream())
+            # Reordered context: best chunks at the start and end of the prompt.
+            context = llm.build_context(search_results)
+            logger.info(
+                f"ASK '{request.query}' agentic={use_agent} → "
+                f"{len(search_results)} chunks, streaming LLM response..."
+            )
 
-        # 2. Build context and stream LLM response
-        context = llm.build_context(search_results)
+            async for chunk in llm.stream_answer(request.query, context):
+                yield {"data": json.dumps(chunk)}
 
-        logger.info(
-            f"ASK '{request.query}' → {len(search_results)} chunks, streaming LLM response..."
-        )
+        except Exception as e:
+            logger.error(f"ASK endpoint error: {e}")
+            yield {"data": json.dumps(f"⚠️ Server error: {str(e)}")}
 
-        async def llm_stream():
-            try:
-                async for chunk in llm.stream_answer(request.query, context):
-                    yield json.dumps(chunk)
-            except Exception as stream_err:
-                logger.error(f"LLM streaming error: {stream_err}")
-                yield json.dumps(f"\n\n⚠️ Error during LLM response: {str(stream_err)}")
-
-        return EventSourceResponse(llm_stream())
-
-
-    except Exception as e:
-        logger.error(f"ASK endpoint error: {e}")
-
-        async def error_stream():
-            yield json.dumps(f"⚠️ Server error: {str(e)}")
-
-        return EventSourceResponse(error_stream())
+    return EventSourceResponse(event_stream())
 
 
 # ============================================================================
@@ -869,7 +933,9 @@ def _github_ingest_worker(repo_url: str, subpath: Optional[str]):
                 if not text_content:
                     continue
 
-                chunks = parsing.chunk_text(text_content)
+                chunks, strategy_used = chunking.chunk_document(
+                    text_content, CHUNKING_STRATEGY, embed_fn=engine.embed_batch
+                )
                 if not chunks:
                     continue
 
@@ -888,6 +954,7 @@ def _github_ingest_worker(repo_url: str, subpath: Optional[str]):
                             "filename": filename,
                             "start_char": start_char,
                             "end_char": end_char,
+                            "chunking": strategy_used,
                             "github_repo": repo_url,
                         }
                     )
@@ -1007,6 +1074,10 @@ def get_stats():
         "model": MODEL_NAME,
         "dimension": EMBEDDING_DIM,
         "index_type": "IndexFlatIP (Cosine Similarity)",
+        "agentic": AGENTIC_RAG,
+        "hybrid_search": HYBRID_SEARCH,
+        "reranker_model": RERANK_MODEL,
+        "chunking_strategy": CHUNKING_STRATEGY,
     }
 
 
