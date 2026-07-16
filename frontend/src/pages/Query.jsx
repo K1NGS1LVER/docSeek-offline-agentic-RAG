@@ -1,18 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   Send,
   FileText,
   ExternalLink,
   Zap,
   Loader2,
-  ChevronDown,
   Terminal,
   Eye,
   EyeOff,
-  Hash,
   MessageSquare,
   Search,
+  Bot,
 } from 'lucide-react';
 import { search, ask, getDocumentViewUrl } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
@@ -89,13 +88,76 @@ function ChunkCard({ result, index, showRaw }) {
   );
 }
 
+/* ── Agent trace timeline ──────────────────────────── */
+const STAGE_STYLES = {
+  plan: 'text-accent',
+  retrieve: 'text-text-dim',
+  rerank: 'text-accent',
+  grade: 'text-success',
+  loop: 'text-caution',
+};
+
+function AgentTrace({ trace, isStreaming }) {
+  if (!trace || trace.length === 0) return null;
+  return (
+    <div className="bg-panel border border-border px-3 py-2 space-y-1">
+      <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider text-text-muted">
+        <Bot className="w-3 h-3" />
+        Agent activity
+        {isStreaming && <Loader2 className="w-3 h-3 animate-spin text-accent" />}
+      </div>
+      {trace.map((ev, i) => (
+        <motion.div
+          key={i}
+          initial={{ opacity: 0, x: -4 }}
+          animate={{ opacity: 1, x: 0 }}
+          className="flex items-baseline gap-2 text-[11px] font-mono"
+        >
+          <span className={`w-16 flex-shrink-0 uppercase ${STAGE_STYLES[ev.stage] || 'text-text-muted'}`}>
+            {ev.stage}
+          </span>
+          <span className="text-text-dim">{ev.message}</span>
+        </motion.div>
+      ))}
+    </div>
+  );
+}
+
+/* ── Sources row (chunks the answer is grounded in) ──── */
+function SourcesRow({ sources }) {
+  if (!sources || sources.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-[10px] font-mono uppercase tracking-wider text-text-muted">
+        Sources
+      </span>
+      {sources.map((s, i) => (
+        <a
+          key={i}
+          href={getDocumentViewUrl(s.id)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1.5 bg-carbon border border-border px-2 py-1 text-[10px] font-mono text-text-dim hover:text-accent hover:border-accent/30 transition-colors"
+          title={s.content?.slice(0, 300)}
+        >
+          <FileText className="w-3 h-3" />
+          {s.source?.filename || `chunk #${s.id}`}
+          <span className="text-text-muted">
+            {Math.round((s.rerank_score != null ? Math.min(Math.max(s.score, 0), 1) : s.score) * 100)}%
+          </span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
 export default function Query() {
   const { stats, addLog } = useSystem();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
-  const [topK, setTopK] = useState(5);
+  const [topK, setTopK] = useState('auto'); // 'auto' lets the agent pick k
   const [mode, setMode] = useState('ask');
   const endRef = useRef(null);
 
@@ -116,13 +178,14 @@ export default function Query() {
   };
 
   const performSearch = async (query) => {
+    const k = topK === 'auto' ? 5 : topK;
     setMessages((prev) => [...prev, { type: 'query', text: query, ts: Date.now() }]);
     setInput('');
     setIsSearching(true);
-    addLog(`Query: "${query}" (k=${topK})`);
+    addLog(`Query: "${query}" (k=${k})`);
 
     try {
-      const { data, latency } = await search(query, topK);
+      const { data, latency } = await search(query, k);
       setMessages((prev) => [
         ...prev,
         { type: 'result', results: data, latency, query, ts: Date.now() },
@@ -148,20 +211,34 @@ export default function Query() {
     // Insert an empty answer placeholder
     setMessages((prev) => [
       ...prev,
-      { type: 'answer', text: '', isStreaming: true, ts: Date.now() }
+      { type: 'answer', text: '', trace: [], sources: [], isStreaming: true, ts: Date.now() }
     ]);
 
-    try {
-      const { data, latency } = await ask(query, topK, (chunk) => {
-        setMessages((prev) => {
-          const updated = [...prev];
-          const lastIdx = updated.length - 1;
-          // Update the streaming chunk
-          updated[lastIdx] = { ...updated[lastIdx], text: chunk, isStreaming: true };
-          return updated;
-        });
+    // All updates target the streaming answer placeholder (last message).
+    const updateLast = (patch) => {
+      setMessages((prev) => {
+        const updated = [...prev];
+        const lastIdx = updated.length - 1;
+        updated[lastIdx] = { ...updated[lastIdx], ...patch(updated[lastIdx]) };
+        return updated;
       });
-      
+    };
+
+    try {
+      const k = topK === 'auto' ? null : topK;
+      const { data, latency } = await ask(
+        query,
+        k,
+        (chunk) => updateLast(() => ({ text: chunk, isStreaming: true })),
+        {
+          onTrace: (ev) => {
+            addLog(`Agent [${ev.stage}] ${ev.message}`);
+            updateLast((msg) => ({ trace: [...(msg.trace || []), ev] }));
+          },
+          onSources: (sources) => updateLast(() => ({ sources })),
+        }
+      );
+
       // Mark as done
       setMessages((prev) => {
           const updated = [...prev];
@@ -224,9 +301,10 @@ export default function Query() {
           <span className="text-[10px] font-mono text-text-muted">K=</span>
           <select
             value={topK}
-            onChange={(e) => setTopK(Number(e.target.value))}
+            onChange={(e) => setTopK(e.target.value === 'auto' ? 'auto' : Number(e.target.value))}
             className="bg-carbon border border-border px-2 py-0.5 text-[11px] font-mono text-text-dim focus:outline-none focus:border-accent/30"
           >
+            <option value="auto">AUTO</option>
             {[1, 3, 5, 10].map((k) => (
               <option key={k} value={k}>{k}</option>
             ))}
@@ -325,6 +403,7 @@ export default function Query() {
                   <span className="text-accent">~</span>
                   <span>AI Assistant {msg.latency ? `(${msg.latency}ms)` : ''}</span>
                 </div>
+                <AgentTrace trace={msg.trace} isStreaming={msg.isStreaming} />
                 <div className="bg-carbon border border-border p-4">
                     <div className="prose prose-invert prose-sm max-w-none text-text-dim font-mono leading-relaxed prose-pre:bg-panel prose-pre:border prose-pre:border-border prose-a:text-accent">
                       <ReactMarkdown>{msg.text || "Thinking..."}</ReactMarkdown>
@@ -333,6 +412,7 @@ export default function Query() {
                       )}
                     </div>
                 </div>
+                <SourcesRow sources={msg.sources} />
               </motion.div>
             );
           }

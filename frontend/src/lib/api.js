@@ -42,7 +42,7 @@ export async function getIngestStatus() {
 
 /* ── Document Ingestion ──────────────────────────────── */
 
-export async function uploadFile(file, onProgress) {
+export async function uploadFile(file) {
   const form = new FormData();
   form.append('file', file);
 
@@ -88,28 +88,36 @@ export async function ingestGithub(repoUrl, subpath = null) {
 
 /* ── Search / Query ──────────────────────────────────── */
 
-export async function search(query, k = 5) {
+export async function search(query, k = 5, rerank = false) {
   return request('/search', {
     method: 'POST',
-    body: JSON.stringify({ query, k }),
+    body: JSON.stringify({ query, k, rerank }),
   });
 }
 
 /**
- * Ask the LLM a question using RAG (streaming SSE response).
+ * Ask the LLM a question using agentic RAG (streaming SSE response).
+ *
+ * The backend streams typed SSE events:
+ * - "trace":   agent decision steps (plan / retrieve / rerank / grade / loop)
+ * - "sources": the retrieved chunks used as context
+ * - default:   JSON-encoded answer text deltas
+ *
  * @param {string} query - The user's question
- * @param {number} k - Number of chunks to retrieve
- * @param {function} onChunk - Callback called with each text chunk as it arrives
- * @returns {Promise<string>} The full accumulated response
+ * @param {number|null} k - Number of chunks to retrieve (null = agent decides)
+ * @param {function} onChunk - Called with the accumulated answer text
+ * @param {object} [handlers] - Optional { onTrace(event), onSources(list), agentic }
+ * @returns {Promise<{data: string, latency: number}>}
  */
-export async function ask(query, k = 3, onChunk) {
+export async function ask(query, k = null, onChunk, handlers = {}) {
+  const { onTrace, onSources, agentic = null } = handlers;
   const url = `${BASE}/ask`;
   const start = performance.now();
 
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, k }),
+    body: JSON.stringify({ query, k, agentic }),
   });
 
   if (!res.ok) {
@@ -121,31 +129,58 @@ export async function ask(query, k = 3, onChunk) {
   const decoder = new TextDecoder();
   let accumulated = '';
   let buffer = '';
+  let eventName = '';
+  let dataLines = [];
+
+  const dispatch = () => {
+    if (dataLines.length === 0) {
+      eventName = '';
+      return;
+    }
+    const rawData = dataLines.join('\n');
+    dataLines = [];
+    const name = eventName;
+    eventName = '';
+
+    let parsed;
+    try {
+      parsed = JSON.parse(rawData);
+    } catch {
+      parsed = rawData; // fallback for non-JSON payloads
+    }
+
+    if (name === 'trace') {
+      if (onTrace && typeof parsed === 'object') onTrace(parsed);
+    } else if (name === 'sources') {
+      if (onSources && Array.isArray(parsed)) onSources(parsed);
+    } else {
+      accumulated += typeof parsed === 'string' ? parsed : rawData;
+      if (onChunk) onChunk(accumulated);
+    }
+  };
+
+  const processLine = (line) => {
+    if (line === '') {
+      dispatch(); // blank line terminates an SSE event block
+    } else if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim();
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).replace(/^ /, ''));
+    }
+    // Ignore comments / id / retry fields.
+  };
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
-
-    const lines = buffer.split('\n');
+    const lines = buffer.split(/\r?\n/);
     buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const rawData = line.slice(6);
-        try {
-          const chunkStr = JSON.parse(rawData);
-          accumulated += chunkStr;
-          if (onChunk) onChunk(accumulated);
-        } catch (e) {
-          // Fallback if not JSON (e.g. from an old server version)
-          accumulated += rawData;
-          if (onChunk) onChunk(accumulated);
-        }
-      }
-    }
+    for (const line of lines) processLine(line);
   }
+
+  dispatch(); // flush any trailing event without a final blank line
 
   const latency = Math.round(performance.now() - start);
   return { data: accumulated, latency };
