@@ -38,7 +38,7 @@ export default function Settings() {
     setFeedback(null);
     addLog('Rebuild index from Settings');
     try {
-      const { data, latency } = await rebuildIndex();
+      const { latency } = await rebuildIndex();
       setFeedback({ type: 'success', msg: `Index rebuilt in ${latency}ms` });
       addLog(`Rebuilt in ${latency}ms`);
       refreshStats();
@@ -59,7 +59,7 @@ export default function Settings() {
     setFeedback(null);
     addLog('SYSTEM RESET initiated', 'WARN');
     try {
-      const { data, latency } = await resetSystem();
+      const { latency } = await resetSystem();
       setFeedback({ type: 'success', msg: `System reset complete (${latency}ms). All data wiped.` });
       addLog(`System reset complete in ${latency}ms`);
       refreshStats();

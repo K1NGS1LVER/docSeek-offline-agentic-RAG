@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
-import { Send, FileText, Upload, Trash2, Bot, User, RotateCcw, Github, AlertCircle } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { Send, FileText, Upload, Bot, User, RotateCcw, Github, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const API_URL = "/api";
@@ -18,7 +18,7 @@ const Dashboard = () => {
     const [ingestStatus, setIngestStatus] = useState({ is_ingesting: false, message: '', progress: 0, total: 0, error: null });
     const chatEndRef = useRef(null);
 
-    const fetchDocuments = async () => {
+    const fetchDocuments = useCallback(async () => {
         try {
             const res = await fetch(`${API_URL}/documents`);
             if (res.ok) {
@@ -28,9 +28,9 @@ const Dashboard = () => {
         } catch (error) {
             console.error("Failed to fetch documents", error);
         }
-    };
+    }, []);
 
-    const fetchStatus = async () => {
+    const fetchStatus = useCallback(async () => {
         try {
             const res = await fetch(`${API_URL}/ingest/status`);
             if (res.ok) {
@@ -45,12 +45,12 @@ const Dashboard = () => {
         } catch (error) {
             console.error("Failed to fetch status", error);
         }
-    };
+    }, [fetchDocuments]);
 
     useEffect(() => {
         fetchDocuments();
         fetchStatus();
-    }, []);
+    }, [fetchDocuments, fetchStatus]);
 
     // Poll for status when ingesting
     useEffect(() => {
@@ -59,7 +59,7 @@ const Dashboard = () => {
             interval = setInterval(fetchStatus, 1000);
         }
         return () => clearInterval(interval);
-    }, [ingestStatus.is_ingesting]);
+    }, [ingestStatus.is_ingesting, fetchStatus]);
 
     const scrollToBottom = () => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -126,8 +126,8 @@ const Dashboard = () => {
                 assistantMessage = { role: 'assistant', content: "Here is what I found:\n\n" + content };
             }
             setMessages(prev => [...prev, assistantMessage]);
-            
-        } catch (error) {
+
+        } catch {
             setMessages(prev => [...prev, { role: 'assistant', content: "Error connecting to the server. Is it running?" }]);
         } finally {
             setIsSearching(false);
@@ -169,7 +169,7 @@ const Dashboard = () => {
             await fetch(`${API_URL}/reset`, { method: "DELETE" });
             setFiles([]);
             setMessages([{ role: 'assistant', content: 'System reset. All documents cleared.' }]);
-        } catch (e) {
+        } catch {
             alert("Failed to reset system");
         }
     }

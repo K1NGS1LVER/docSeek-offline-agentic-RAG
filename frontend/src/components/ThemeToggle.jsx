@@ -2,30 +2,22 @@ import { useState, useEffect } from 'react';
 import { Sun, Moon } from 'lucide-react';
 import { motion } from 'framer-motion';
 
+// Default to Dark Mode if no preference, or if user explicitly chose dark, or if system is dark
+const getInitialDark = () =>
+    !('theme' in localStorage) ||
+    localStorage.theme === 'dark' ||
+    window.matchMedia('(prefers-color-scheme: dark)').matches;
+
 const ThemeToggle = () => {
-    const [isDark, setIsDark] = useState(true);
+    const [isDark, setIsDark] = useState(getInitialDark);
 
     useEffect(() => {
-        // Default to Dark Mode if no preference, or if user explicitly chose dark, or if system is dark
-        if (!('theme' in localStorage) || localStorage.theme === 'dark' || window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            setIsDark(true);
-            document.documentElement.classList.add('dark');
-        } else {
-            setIsDark(false);
-            document.documentElement.classList.remove('dark');
-        }
-    }, []);
+        document.documentElement.classList.toggle('dark', isDark);
+    }, [isDark]);
 
     const toggleTheme = () => {
-        if (isDark) {
-            document.documentElement.classList.remove('dark');
-            localStorage.theme = 'light';
-            setIsDark(false);
-        } else {
-            document.documentElement.classList.add('dark');
-            localStorage.theme = 'dark';
-            setIsDark(true);
-        }
+        localStorage.theme = isDark ? 'light' : 'dark';
+        setIsDark(!isDark);
     };
 
     return (

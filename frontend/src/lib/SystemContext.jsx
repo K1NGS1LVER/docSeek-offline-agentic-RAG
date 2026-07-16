@@ -3,6 +3,9 @@ import { getStats, getIngestStatus, getDocuments } from '../lib/api';
 
 const SystemContext = createContext(null);
 
+// The hook and provider live together by design; splitting files just for
+// fast refresh would complicate every import site.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useSystem() {
   return useContext(SystemContext);
 }
@@ -51,11 +54,15 @@ export function SystemProvider({ children }) {
       if (data.is_ingesting) {
         setHealth('INDEXING');
       }
-    } catch (_) {}
+    } catch {
+      // Server unreachable; keep the last known status.
+    }
   }, []);
 
-  // Initial load + polling
+  // Initial load + polling. These are async fetchers: state is set in their
+  // promise continuations, not synchronously in the effect body.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refreshStats();
     refreshDocuments();
     refreshIngestStatus();

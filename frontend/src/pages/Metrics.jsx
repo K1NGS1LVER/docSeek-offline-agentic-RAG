@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Activity,
@@ -72,25 +72,17 @@ function MetricCard({ label, value, unit, sub, icon: Icon, trend, sparkData }) {
 export default function Metrics() {
   const { stats, lastLatency, health, logs } = useSystem();
   const [latencyHistory, setLatencyHistory] = useState([]);
-  const [queryCount, setQueryCount] = useState(0);
-  const [errorCount, setErrorCount] = useState(0);
-  const prevLatency = useRef(null);
+  const [prevLatency, setPrevLatency] = useState(null);
 
-  // Track latency history
-  useEffect(() => {
-    if (lastLatency != null && lastLatency !== prevLatency.current) {
-      prevLatency.current = lastLatency;
-      setLatencyHistory((prev) => [...prev.slice(-29), lastLatency]);
-    }
-  }, [lastLatency]);
+  // Track latency history (state adjusted during render, not in an effect).
+  if (lastLatency != null && lastLatency !== prevLatency) {
+    setPrevLatency(lastLatency);
+    setLatencyHistory((prev) => [...prev.slice(-29), lastLatency]);
+  }
 
-  // Count queries and errors from logs
-  useEffect(() => {
-    const queries = logs.filter((l) => l.msg.startsWith('Query:')).length;
-    const errors = logs.filter((l) => l.level === 'ERROR').length;
-    setQueryCount(queries);
-    setErrorCount(errors);
-  }, [logs]);
+  // Query/error counts are derived from logs; no state needed.
+  const queryCount = logs.filter((l) => l.msg.startsWith('Query:')).length;
+  const errorCount = logs.filter((l) => l.level === 'ERROR').length;
 
   const avgLatency =
     latencyHistory.length > 0

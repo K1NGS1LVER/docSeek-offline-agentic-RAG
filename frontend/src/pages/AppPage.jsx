@@ -56,7 +56,7 @@ export default function AppPage({ theme, setTheme }) {
       const r = await fetch(`${API}/documents`)
       if (!r.ok) return
       setDocs(await r.json())
-    } catch {}
+    } catch { /* server unreachable; keep last list */ }
   }, [])
 
   useEffect(() => {
@@ -156,7 +156,7 @@ export default function AppPage({ theme, setTheme }) {
           else setGhNote({ type: 'ok', msg: '✓ Ingestion complete' })
           await fetchStats(); await fetchDocs()
         }
-      } catch {}
+      } catch { /* poll again on next tick */ }
     }, 1500)
   }
 
@@ -214,7 +214,7 @@ export default function AppPage({ theme, setTheme }) {
                 const data = JSON.parse(line.slice(6))
                 fullText += data
                 setLlmResponse(fullText)
-              } catch (e) {
+              } catch {
                 // If the stream data is not JSON (e.g., error string)
                 fullText += line.slice(6)
                 setLlmResponse(fullText)
@@ -230,7 +230,7 @@ export default function AppPage({ theme, setTheme }) {
           const data = JSON.parse(buffer.slice(6))
           fullText += data
           setLlmResponse(fullText)
-        } catch (e) {
+        } catch {
           fullText += buffer.slice(6)
           setLlmResponse(fullText)
         }
@@ -268,7 +268,7 @@ export default function AppPage({ theme, setTheme }) {
       await fetch(`${API}/reset`, { method: 'DELETE' })
       setStats(null); setResults(null); setQuery(''); setDocs([])
       await fetchStats()
-    } catch {}
+    } catch { /* reset failed; leave current state visible */ }
     setResetting(false); setResetConfirm(false)
   }
 

@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
 import {
   Bug,
   Play,
@@ -7,8 +6,6 @@ import {
   Copy,
   Check,
   Terminal,
-  Send,
-  ChevronDown,
 } from 'lucide-react';
 import { useSystem } from '../lib/SystemContext';
 
