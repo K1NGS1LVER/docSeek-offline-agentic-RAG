@@ -4,24 +4,32 @@ import threading
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from .config import MODEL_NAME, EMBEDDING_DIM, INDEX_PATH
+from .config import MODEL_NAME, EMBEDDING_DIM
 
 logger = logging.getLogger(__name__)
 
+_model = None
+_model_lock = threading.Lock()
+
+
+def get_shared_model() -> SentenceTransformer:
+    """The embedding model is identical across notebooks; load it once."""
+    global _model
+    if _model is None:
+        with _model_lock:
+            if _model is None:
+                logger.info(f"Loading model: {MODEL_NAME}...")
+                _model = SentenceTransformer(MODEL_NAME)
+    return _model
+
 
 class VectorEngine:
-    """Manages embeddings and FAISS index with explicit ID mapping"""
+    """Manages one notebook's FAISS index (embeddings via the shared model)."""
 
-    def __init__(self):
-        logger.info(f"Loading model: {MODEL_NAME}...")
-        try:
-            self.model = SentenceTransformer(MODEL_NAME)
-        except Exception as e:
-            logger.error(f"Failed to load embedding model '{MODEL_NAME}': {e}")
-            raise
-
+    def __init__(self, index_path: str):
+        self.model = get_shared_model()
         self.dimension = EMBEDDING_DIM
-        self.index_path = INDEX_PATH
+        self.index_path = index_path
 
         # Load existing index or create new one
         if os.path.exists(self.index_path):
