@@ -25,3 +25,7 @@ improvement.md
 
 # Local agent instructions (not published)
 CLAUDE.md
+.claude/
+
+# Local AI-harness plugin output (not published)
+docs/superpowers/
