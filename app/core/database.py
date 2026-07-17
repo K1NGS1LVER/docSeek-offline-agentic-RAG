@@ -3,20 +3,19 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from typing import List, Optional, Dict, Any
-from .config import DB_PATH
 
 @contextmanager
-def get_db():
+def get_db(db_path: str):
     """Context manager for database connections"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(db_path)
     try:
         yield conn
     finally:
         conn.close()
 
-def init_db():
+def init_db(db_path: str):
     """Initialize SQLite database and run idempotent migrations."""
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
@@ -87,9 +86,9 @@ def init_db():
                 "INSERT INTO documents_fts(rowid, content) SELECT id, content FROM documents"
             )
         conn.commit()
-    print(f"Database initialized at {DB_PATH}")
+    print(f"Database initialized at {db_path}")
 
-def insert_document(content: str, metadata: Optional[str] = None) -> int:
+def insert_document(db_path: str, content: str, metadata: Optional[str] = None) -> int:
     """Insert document and return its ID. Extracts source_file from metadata."""
     source_file = None
     if metadata:
@@ -97,7 +96,7 @@ def insert_document(content: str, metadata: Optional[str] = None) -> int:
             source_file = json.loads(metadata).get("source_file")
         except Exception:
             source_file = None
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
             "INSERT INTO documents (content, metadata, source_file) VALUES (?, ?, ?)",
@@ -107,12 +106,12 @@ def insert_document(content: str, metadata: Optional[str] = None) -> int:
         conn.commit()
     return doc_id
 
-def fetch_documents_by_ids(doc_ids: List[int]) -> List[Dict[str, Any]]:
+def fetch_documents_by_ids(db_path: str, doc_ids: List[int]) -> List[Dict[str, Any]]:
     """Fetch documents by their IDs"""
     if not doc_ids:
         return []
 
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         placeholders = ",".join("?" * len(doc_ids))
         cursor.execute(
@@ -123,24 +122,24 @@ def fetch_documents_by_ids(doc_ids: List[int]) -> List[Dict[str, Any]]:
 
     return [{"id": row[0], "content": row[1], "metadata": row[2]} for row in rows]
 
-def get_document_count() -> int:
+def get_document_count(db_path: str) -> int:
     """Get total number of documents"""
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM documents")
         return cursor.fetchone()[0]
 
-def get_all_metadata() -> List[str]:
+def get_all_metadata(db_path: str) -> List[str]:
     """Get metadata for all documents to identify unique files"""
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT metadata FROM documents WHERE metadata IS NOT NULL")
         rows = cursor.fetchall()
     return [row[0] for row in rows]
 
-def fetch_document_by_id(doc_id: int) -> Optional[Dict[str, Any]]:
+def fetch_document_by_id(db_path: str, doc_id: int) -> Optional[Dict[str, Any]]:
     """Fetch a single document by its ID"""
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, content, metadata FROM documents WHERE id = ?", (doc_id,))
         row = cursor.fetchone()
@@ -148,17 +147,17 @@ def fetch_document_by_id(doc_id: int) -> Optional[Dict[str, Any]]:
         return None
     return {"id": row[0], "content": row[1], "metadata": row[2]}
 
-def get_all_documents() -> List[Dict[str, Any]]:
+def get_all_documents(db_path: str) -> List[Dict[str, Any]]:
     """Fetch all documents (for index rebuilding)"""
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, content, metadata FROM documents")
         rows = cursor.fetchall()
     return [{"id": row[0], "content": row[1], "metadata": row[2]} for row in rows]
 
-def fetch_chunks_by_source(source_file: str) -> List[Dict[str, Any]]:
+def fetch_chunks_by_source(db_path: str, source_file: str) -> List[Dict[str, Any]]:
     """Fetch all chunks sharing a source_file, via the indexed column."""
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, content, metadata FROM documents WHERE source_file = ?",
@@ -167,13 +166,13 @@ def fetch_chunks_by_source(source_file: str) -> List[Dict[str, Any]]:
         rows = cursor.fetchall()
     return [{"id": row[0], "content": row[1], "metadata": row[2]} for row in rows]
 
-def get_ids_for_sources(source_files: List[str]) -> List[int]:
+def get_ids_for_sources(db_path: str, source_files: List[str]) -> List[int]:
     """All chunk ids belonging to the given sources.
 
     Sources may be addressed by full source_file value, its basename, or the
     metadata filename (they usually coincide; GitHub ingests differ)."""
     allowed = set(source_files)
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, source_file, metadata FROM documents WHERE source_file IS NOT NULL"
@@ -193,10 +192,10 @@ def get_ids_for_sources(source_files: List[str]) -> List[int]:
             ids.append(doc_id)
     return ids
 
-def list_sources() -> List[Dict[str, Any]]:
+def list_sources(db_path: str) -> List[Dict[str, Any]]:
     """One row per source_file: chunk count, a representative chunk id, and a
     metadata sample (from the source's first chunk)."""
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
             """SELECT source_file, COUNT(*), MIN(id),
@@ -213,9 +212,9 @@ def list_sources() -> List[Dict[str, Any]]:
         for r in rows
     ]
 
-def delete_documents_by_source(source_file: str) -> List[int]:
+def delete_documents_by_source(db_path: str, source_file: str) -> List[int]:
     """Delete all chunks for a source_file. Returns the deleted ids."""
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         ids = [
             row[0]
@@ -230,7 +229,7 @@ def delete_documents_by_source(source_file: str) -> List[int]:
             conn.commit()
     return ids
 
-def keyword_search(query: str, k: int) -> List[int]:
+def keyword_search(db_path: str, query: str, k: int) -> List[int]:
     """BM25 keyword search over content via FTS5. Returns DB ids, best first."""
     if not query.strip():
         return []
@@ -241,7 +240,7 @@ def keyword_search(query: str, k: int) -> List[int]:
     match = " ".join(
         '"' + token.replace('"', '""') + '"' for token in query.split() if token
     )
-    with get_db() as conn:
+    with get_db(db_path) as conn:
         cursor = conn.cursor()
         try:
             rows = cursor.execute(
