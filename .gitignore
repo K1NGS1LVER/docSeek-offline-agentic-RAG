@@ -19,3 +19,6 @@ data/
 # OS specific
 .DS_Store
 .tissues
+
+# Local planning notes
+improvement.md
