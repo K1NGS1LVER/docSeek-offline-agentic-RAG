@@ -9,17 +9,42 @@ DATA_DIR = Path(os.environ.get("DOCSEEK_DATA_DIR", BASE_DIR / "data"))
 
 # Ensure data directory exists
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-UPLOAD_DIR = DATA_DIR / "uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Per-notebook path resolvers
+NOTEBOOKS_DIR = DATA_DIR / "notebooks"
+NOTEBOOKS_DIR.mkdir(parents=True, exist_ok=True)
+NOTEBOOKS_REGISTRY = DATA_DIR / "notebooks.json"
+
+
+def notebook_dir(nb_id: str) -> Path:
+    d = NOTEBOOKS_DIR / nb_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def db_path(nb_id: str) -> str:
+    return str(notebook_dir(nb_id) / "docs.db")
+
+
+def index_path(nb_id: str) -> str:
+    return str(notebook_dir(nb_id) / "my_index.faiss")
+
+
+def upload_dir(nb_id: str) -> Path:
+    d = notebook_dir(nb_id) / "uploads"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def audio_dir(nb_id: str) -> Path:
+    d = notebook_dir(nb_id) / "audio"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 # Max accepted upload size (bytes). ponytail: read() still buffers in RAM;
 # true fix is streaming with a running size guard. Cap keeps a single request
 # from OOMing the process.
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
-
-# File Paths
-DB_PATH = str(DATA_DIR / "docs.db")
-INDEX_PATH = str(DATA_DIR / "my_index.faiss")
 
 # Settings
 MODEL_NAME = "all-mpnet-base-v2"
@@ -108,10 +133,6 @@ STT_MODEL = os.environ.get("DOCSEEK_STT_MODEL", "small")
 # Full voice list ships with the `kokoro` package.
 TTS_VOICE_A = os.environ.get("DOCSEEK_TTS_VOICE_A", "af_heart")
 TTS_VOICE_B = os.environ.get("DOCSEEK_TTS_VOICE_B", "am_michael")
-
-# Generated podcast WAVs + their JSON metadata sidecars live here.
-AUDIO_DIR = DATA_DIR / "audio"
-AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 # Upper bound on sections in a deep research report.
 RESEARCH_MAX_SECTIONS = 6
