@@ -39,7 +39,7 @@ from app.core.agent import RetrievalAgent
 # Per-notebook runtime registry (Step 2 below) needs these.
 from collections import namedtuple
 from app.core import notebooks, migration
-from app.core.config import db_path as nb_db_path, index_path as nb_index_path, upload_dir
+from app.core.config import db_path as nb_db_path, index_path as nb_index_path, upload_dir, audio_dir
 
 try:
     from docx import Document
@@ -255,6 +255,7 @@ class DocumentViewResponse(BaseModel):
 
 
 class GitHubIngestRequest(BaseModel):
+    notebook_id: str
     repo_url: str
     subpath: Optional[str] = None
 
@@ -879,10 +880,11 @@ podcast_jobs: Dict[str, Dict[str, Any]] = {}
 
 
 class PodcastRequest(BaseModel):
+    notebook_id: str
     source_files: List[str]
 
 
-def _podcast_worker(job_id: str, source_files: List[str]):
+def _podcast_worker(job_id: str, notebook_id: str, source_files: List[str]):
     """Background worker: drive the podcast LangGraph in its own event loop."""
     import asyncio
 
@@ -896,7 +898,12 @@ def _podcast_worker(job_id: str, source_files: List[str]):
             })
 
     try:
-        result = asyncio.run(podcast.generate_podcast(job_id, source_files, on_progress))
+        rt = get_runtime(notebook_id)
+        result = asyncio.run(
+            podcast.generate_podcast(
+                rt.db_path, audio_dir(notebook_id), job_id, source_files, on_progress
+            )
+        )
     except Exception as e:  # asyncio/loop-level failure
         logger.error(f"Podcast worker {job_id} failed: {e}")
         result = {"status": "failed", "error": str(e)}
@@ -917,6 +924,7 @@ def create_podcast(request: PodcastRequest):
     job_id to poll via /podcast/status."""
     import uuid
 
+    rt = get_runtime(request.notebook_id)  # 404s bad notebook ids early
     sources = [s for s in (request.source_files or []) if s and s.strip()]
     if not sources:
         raise HTTPException(status_code=400, detail="Select at least one source.")
@@ -924,6 +932,7 @@ def create_podcast(request: PodcastRequest):
     job_id = uuid.uuid4().hex[:12]
     podcast_jobs[job_id] = {
         "job_id": job_id,
+        "notebook_id": request.notebook_id,
         "status": "running",
         "stage": "queued",
         "message": "Starting…",
@@ -932,7 +941,7 @@ def create_podcast(request: PodcastRequest):
         "error": None,
     }
     thread = threading.Thread(
-        target=_podcast_worker, args=(job_id, sources), daemon=True
+        target=_podcast_worker, args=(job_id, request.notebook_id, sources), daemon=True
     )
     thread.start()
     logger.info(f"Podcast job {job_id} started for {len(sources)} source(s)")
@@ -940,9 +949,9 @@ def create_podcast(request: PodcastRequest):
 
 
 @app.get("/podcast/status")
-def podcast_status(job_id: str = Query(...)):
+def podcast_status(job_id: str = Query(...), notebook_id: str = Query(...)):
     job = podcast_jobs.get(job_id)
-    if job is None:
+    if job is None or job.get("notebook_id") != notebook_id:
         raise HTTPException(status_code=404, detail="Unknown podcast job")
     return {
         "job_id": job_id,
@@ -957,18 +966,18 @@ def podcast_status(job_id: str = Query(...)):
 
 
 @app.get("/podcast/audio")
-def podcast_audio(job_id: str = Query(...)):
+def podcast_audio(job_id: str = Query(...), notebook_id: str = Query(...)):
     """Serve the generated WAV for a completed episode."""
-    wav = AUDIO_DIR / f"{job_id}.wav"
+    wav = audio_dir(notebook_id) / f"{job_id}.wav"
     if not wav.exists():
         raise HTTPException(status_code=404, detail="Audio not found for this job")
     return FileResponse(str(wav), media_type="audio/wav", filename=f"{job_id}.wav")
 
 
 @app.get("/podcasts")
-def list_podcasts():
-    """All generated episodes, newest first."""
-    return podcast.list_episodes()
+def list_podcasts(notebook_id: str = Query(...)):
+    """All generated episodes for this notebook, newest first."""
+    return podcast.list_episodes(audio_dir(notebook_id))
 
 
 class TTSRequest(BaseModel):
@@ -1213,16 +1222,18 @@ github_ingest_status = {
     "total": 0,
     "message": "Idle",
     "error": None,
+    "notebook_id": None,
 }
 
 
-def _github_ingest_worker(repo_url: str, subpath: Optional[str]):
+def _github_ingest_worker(notebook_id: str, repo_url: str, subpath: Optional[str]):
     """Background worker to clone and ingest a GitHub repo"""
     import tempfile
     import subprocess
     import re as re_module
 
     global github_ingest_status
+    rt = get_runtime(notebook_id)
     github_ingest_status = {
         "is_ingesting": True,
         "current_file": "",
@@ -1230,6 +1241,7 @@ def _github_ingest_worker(repo_url: str, subpath: Optional[str]):
         "total": 0,
         "message": f"Cloning {repo_url}...",
         "error": None,
+        "notebook_id": notebook_id,
     }
 
     try:
@@ -1301,13 +1313,13 @@ def _github_ingest_worker(repo_url: str, subpath: Optional[str]):
                     continue
 
                 chunks, strategy_used = chunking.chunk_document(
-                    text_content, CHUNKING_STRATEGY, embed_fn=engine.embed_batch
+                    text_content, CHUNKING_STRATEGY, embed_fn=rt.engine.embed_batch
                 )
                 if not chunks:
                     continue
 
                 chunk_texts = [ct for ct, _, _ in chunks]
-                embeddings = engine.embed_batch(chunk_texts)
+                embeddings = rt.engine.embed_batch(chunk_texts)
 
                 doc_ids = []
                 for i, ((chunk_text, start_char, end_char), embedding) in enumerate(
@@ -1325,16 +1337,16 @@ def _github_ingest_worker(repo_url: str, subpath: Optional[str]):
                             "github_repo": repo_url,
                         }
                     )
-                    doc_id = database.insert_document(chunk_text, metadata)
+                    doc_id = database.insert_document(rt.db_path, chunk_text, metadata)
                     doc_ids.append(doc_id)
 
-                engine.add_to_index(embeddings, doc_ids=doc_ids)
+                rt.engine.add_to_index(embeddings, doc_ids=doc_ids)
                 total_chunks += len(chunks)
 
             except Exception as file_err:
                 logger.error(f"Error processing {filename}: {file_err}")
 
-        engine.save()
+        rt.engine.save()
 
         github_ingest_status["is_ingesting"] = False
         github_ingest_status["message"] = (
@@ -1359,6 +1371,7 @@ def _github_ingest_worker(repo_url: str, subpath: Optional[str]):
 @app.post("/ingest/github")
 def ingest_github(request: GitHubIngestRequest):
     """Start ingesting documentation from a GitHub repository"""
+    rt = get_runtime(request.notebook_id)  # 404s bad notebook ids early
     if github_ingest_status["is_ingesting"]:
         raise HTTPException(
             status_code=409, detail="An ingestion is already in progress"
@@ -1375,7 +1388,7 @@ def ingest_github(request: GitHubIngestRequest):
     # Start ingestion in background thread
     thread = threading.Thread(
         target=_github_ingest_worker,
-        args=(request.repo_url, request.subpath),
+        args=(request.notebook_id, request.repo_url, request.subpath),
         daemon=True,
     )
     thread.start()
@@ -1449,7 +1462,19 @@ def delete_document(
 
 
 @app.get("/ingest/status")
-def get_ingest_status():
+def get_ingest_status(notebook_id: str = Query(...)):
+    if github_ingest_status.get("notebook_id") != notebook_id:
+        # A different (or no) notebook owns the in-flight/last job; this
+        # notebook never sees another notebook's ingest progress.
+        return {
+            "is_ingesting": False,
+            "current_file": "",
+            "progress": 0,
+            "total": 0,
+            "message": "Idle",
+            "error": None,
+            "history": [],
+        }
     return {
         "is_ingesting": github_ingest_status["is_ingesting"],
         "current_file": github_ingest_status.get("current_file", ""),

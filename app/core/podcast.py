@@ -26,6 +26,7 @@ unavailable the job fails with a clear error status (surfaced via polling).
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TypedDict
 
 import numpy as np
@@ -68,6 +69,8 @@ Use 4 to 6 turns, alternating speakers, starting with A."""
 
 class PodcastState(TypedDict, total=False):
     job_id: str
+    db_path: str
+    audio_dir: Path
     source_files: List[str]
     context: str
     title: str
@@ -78,13 +81,13 @@ class PodcastState(TypedDict, total=False):
     error: str
 
 
-def _assemble_context(source_files: List[str]) -> str:
+def _assemble_context(db_path: str, source_files: List[str]) -> str:
     """Pull every chunk for the selected sources, ordered, and join into one
     context block capped at MAX_CONTEXT_CHARS."""
-    ids = database.get_ids_for_sources(source_files)
+    ids = database.get_ids_for_sources(db_path, source_files)
     if not ids:
         return ""
-    docs = database.fetch_documents_by_ids(ids)
+    docs = database.fetch_documents_by_ids(db_path, ids)
 
     def _sort_key(d: Dict[str, Any]):
         meta = {}
@@ -120,7 +123,7 @@ class PodcastGraph:
     async def _gather_node(self, state: PodcastState) -> Dict[str, Any]:
         writer = get_stream_writer()
         writer({"stage": "gather", "message": "Gathering source material…", "progress": 5})
-        context = _assemble_context(state["source_files"])
+        context = _assemble_context(state["db_path"], state["source_files"])
         if not context.strip():
             return {"error": "No content found for the selected sources."}
         return {"context": context}
@@ -221,7 +224,7 @@ class PodcastGraph:
         waveform = np.concatenate(segments)
         duration = round(len(waveform) / tts.SAMPLE_RATE, 2)
 
-        audio_path = str(AUDIO_DIR / f"{state['job_id']}.wav")
+        audio_path = str(state["audio_dir"] / f"{state['job_id']}.wav")
         sf.write(audio_path, waveform, tts.SAMPLE_RATE)
         writer({"stage": "done", "message": "Episode ready.", "progress": 100})
         return {"audio_path": audio_path, "duration": duration}
@@ -250,12 +253,19 @@ class PodcastGraph:
     async def run(
         self,
         job_id: str,
+        db_path: str,
+        audio_dir: Path,
         source_files: List[str],
         on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """Drive the graph, forwarding node progress to on_progress; returns the
         final state (with either audio_path or error set)."""
-        initial: PodcastState = {"job_id": job_id, "source_files": source_files}
+        initial: PodcastState = {
+            "job_id": job_id,
+            "db_path": db_path,
+            "audio_dir": audio_dir,
+            "source_files": source_files,
+        }
         final_state: Dict[str, Any] = {}
         async for mode, chunk in self._graph.astream(
             initial, stream_mode=["custom", "values"]
@@ -268,6 +278,8 @@ class PodcastGraph:
 
 
 async def generate_podcast(
+    db_path: str,
+    audio_dir: Path,
     job_id: str,
     source_files: List[str],
     on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -281,7 +293,7 @@ async def generate_podcast(
     llm = OllamaLLM()
     graph = PodcastGraph(llm)
     try:
-        state = await graph.run(job_id, source_files, on_progress)
+        state = await graph.run(job_id, db_path, audio_dir, source_files, on_progress)
     except Exception as e:  # unexpected failure -> clean error status
         logger.error(f"Podcast job {job_id} crashed: {e}", exc_info=True)
         return {"status": "failed", "error": str(e)}
@@ -298,21 +310,21 @@ async def generate_podcast(
         "audio_file": f"{job_id}.wav",
         "created_at": time.time(),
     }
-    sidecar = AUDIO_DIR / f"{job_id}.json"
+    sidecar = audio_dir / f"{job_id}.json"
     sidecar.write_text(json.dumps(meta, indent=2))
     logger.info(f"✅ Podcast {job_id} ready: '{meta['title']}' ({meta['duration']}s)")
     return {"status": "completed", **meta, "audio_path": state.get("audio_path")}
 
 
-def list_episodes() -> List[Dict[str, Any]]:
-    """All generated episodes, newest first, from the JSON sidecars in AUDIO_DIR."""
+def list_episodes(audio_dir: Path) -> List[Dict[str, Any]]:
+    """All generated episodes, newest first, from the JSON sidecars in audio_dir."""
     episodes = []
-    for sidecar in AUDIO_DIR.glob("*.json"):
+    for sidecar in audio_dir.glob("*.json"):
         try:
             meta = json.loads(sidecar.read_text())
         except Exception:
             continue
-        wav = AUDIO_DIR / meta.get("audio_file", "")
+        wav = audio_dir / meta.get("audio_file", "")
         if not wav.exists():
             continue
         episodes.append({
