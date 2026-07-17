@@ -90,6 +90,10 @@ These build on the same one-time-download-then-offline model story as the embedd
   Unlike the retrieval agent it has no heuristic fallback (a coherent script genuinely needs the LLM); if Ollama or the TTS model is unavailable the job fails with a clear error.
   Podcasts take minutes, so they run via the background-worker + status-polling pattern (like GitHub ingest): `POST /podcast` (`source_files` → `job_id`, runs the graph in a worker thread's own event loop), `GET /podcast/status`, `GET /podcast/audio` (WAV via `FileResponse`), `GET /podcasts` (episode list from the sidecars).
   Frontend: an "Audio" tab in `StudioPanel` generates from the currently selected sources, shows live progress, and lists episodes with an HTML5 player + WAV download.
+- **Deep research reports** (`app/core/research.py`): a third LangGraph graph (`plan_report → research → write → synthesize`) that reuses the shared retrieval building blocks.
+  `plan_report` (LLM JSON, heuristic fallback) splits the question into 3-6 sections each with a retrieval query (bounded by `RESEARCH_MAX_SECTIONS`); `research` retrieves per section via the same `_retrieve_and_filter` used by `/search` and `/ask` (optionally cross-encoder reranked), deduped across sections into one global, citation-numbered sources list; `write` streams each section token-by-token from its evidence (global `[n]` citations); `synthesize` streams a conclusion + a Sources list.
+  `POST /research` streams over SSE with the **exact same typed-event protocol as `/ask`** (`trace` per node/section, one `sources` event, then JSON-encoded text deltas), so `api.js` reuses one `streamTypedSSE` parser for both via a thin `research()` wrapper.
+  Frontend: a third "Research" mode in `ChatPanel`'s Ask/Search toggle, rendering the report (with citation chips) plus a download-as-Markdown button.
 
 ### Persistence and lifecycle
 
@@ -98,6 +102,7 @@ These build on the same one-time-download-then-offline model story as the embedd
 - `VectorEngine.__init__` defends against loading a stale/incompatible FAISS index type (anything that isn't `IndexIDMap`/`IndexIDMap2`) by discarding it and starting a fresh empty index — in that case vectors are gone until `/rebuild` is called.
 - `DELETE /reset` deletes both `docs.db` and `my_index.faiss` outright and reinitializes empty.
 - Config (model name/dim, paths, host/port, LLM settings) is centralized in `app/core/config.py`. Changing `MODEL_NAME` requires also updating `EMBEDDING_DIM` to match, and existing indexes built with a different model are not compatible (rebuild required).
+- The Ollama chat model is `LLM_MODEL` (env-overridable via `DOCSEEK_LLM_MODEL`, default `phi3:mini`). phi3:mini handles planning/grading JSON fine but is weak for longer generation; pull a stronger local model (e.g. `qwen3:8b`) and set the env var for better podcast scripts / research reports.
 
 ### Frontend
 

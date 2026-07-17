@@ -194,18 +194,53 @@ export async function search(query, k = 5, rerank = false, sourceFiles = null) {
  */
 export async function ask(query, k = null, onChunk, handlers = {}) {
   const { onTrace, onSources, agentic = null, sourceFiles = null } = handlers;
-  const url = `${BASE}/ask`;
+  return streamTypedSSE({
+    url: `${BASE}/ask`,
+    body: { query, k, agentic, source_files: sourceFiles },
+    onChunk,
+    onTrace,
+    onSources,
+  });
+}
+
+/**
+ * Deep research report (streaming SSE). Uses the exact same typed-event
+ * protocol as {@link ask} (trace / sources / answer-text deltas), so it shares
+ * the parser.
+ *
+ * @param {string} query - The research question
+ * @param {function} onChunk - Called with the accumulated report markdown
+ * @param {object} [handlers] - Optional { onTrace(event), onSources(list), sourceFiles }
+ * @returns {Promise<{data: string, latency: number}>}
+ */
+export async function research(query, onChunk, handlers = {}) {
+  const { onTrace, onSources, sourceFiles = null } = handlers;
+  return streamTypedSSE({
+    url: `${BASE}/research`,
+    body: { query, source_files: sourceFiles },
+    onChunk,
+    onTrace,
+    onSources,
+  });
+}
+
+/**
+ * Shared typed-SSE streamer for /ask and /research. Dispatches `trace` and
+ * `sources` events to callbacks and accumulates unnamed events (JSON-encoded
+ * text deltas) into the answer text; typed events never leak into the text.
+ */
+async function streamTypedSSE({ url, body, onChunk, onTrace, onSources }) {
   const start = performance.now();
 
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, k, agentic, source_files: sourceFiles }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || `HTTP ${res.status}`);
+    const errBody = await res.text();
+    throw new Error(errBody || `HTTP ${res.status}`);
   }
 
   const reader = res.body.getReader();

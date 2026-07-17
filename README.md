@@ -9,6 +9,7 @@ Nothing leaves your machine (model weights are downloaded once from HuggingFace,
 *   **Agentic retrieval loop (LangGraph):** a local LLM agent, orchestrated as a LangGraph `StateGraph`, plans each query (dynamic top-k, query rewriting, sub-query decomposition), decides whether to rerank, grades the retrieved evidence, and re-loops with a reformulated query when the evidence is weak (CRAG-style). LangGraph is pure orchestration (no network calls), so the local-first guarantee is unchanged.
 *   **Local dictation:** a mic button in the ask bar records your question and transcribes it on-device with faster-whisper (`POST /transcribe`) — no audio ever leaves your machine.
 *   **Audio overviews (podcast):** turn selected sources into a two-host podcast, scripted by the local LLM and voiced on-device with Kokoro TTS (a second LangGraph graph, `POST /podcast`). Answers also get a read-aloud button (`POST /tts`).
+*   **Deep research reports:** a "Research" mode that writes a long, structured, cited report by planning sections, retrieving evidence per section, and streaming each section as it is written (a third LangGraph graph, `POST /research`, same SSE protocol as `/ask`).
 *   **Hybrid search:** dense vectors (FAISS, `all-mpnet-base-v2`) fused with BM25 keyword search (SQLite FTS5) via Reciprocal Rank Fusion.
 *   **Local cross-encoder reranking:** `ms-marco-MiniLM-L-6-v2` rescores candidates on-device when the agent judges precision matters.
 *   **Broad file support:** ingest `.txt`, `.md`, `.html`, `.docx`, `.pdf`, and `.pptx`. Scanned/image-only PDFs are read via an on-device Tesseract OCR fallback.
@@ -162,6 +163,18 @@ curl "http://localhost:8000/podcast/audio?job_id=<id>" --output overview.wav
 
 Podcast generation needs both Ollama (for the script) and the Kokoro TTS model. Kokoro needs a one-time install via `./scripts/install_audio.sh` (it can't go in `requirements.txt` cleanly — see that script's header for why). That script also installs `espeak-ng`, the phoneme fallback for out-of-vocabulary words (drug names, acronyms, numbers) — strongly recommended, since without it those passages are skipped in the audio.
 
+### 8. Deep research report
+
+Switch the chat to **Research** mode to generate a long, structured report. The local LLM plans 3-6 sections, retrieves evidence for each, and writes each section with inline citations — streamed live over SSE, then downloadable as Markdown.
+
+```bash
+curl -N -X POST "http://localhost:8000/research" \
+     -H "Content-Type: application/json" \
+     -d '{"query": "How does docSeek retrieve information while protecting privacy?"}'
+```
+
+Uses the same typed SSE events as `/ask` (`trace`, `sources`, then answer-text deltas). A stronger local model than `phi3:mini` (e.g. `qwen3:8b` via `DOCSEEK_LLM_MODEL`) produces noticeably better reports.
+
 ## ⚙️ Configuration
 You can adjust settings in `app/core/config.py`:
 *   **MODEL_NAME:** Change embedding model (e.g., `all-MiniLM-L6-v2` for speed).
@@ -171,9 +184,10 @@ You can adjust settings in `app/core/config.py`:
 *   **RERANK_MODEL / RERANK_CANDIDATE_FACTOR:** Local cross-encoder and its over-fetch multiplier.
 *   **MAX_AGENT_LOOPS / AGENT_MIN_K / AGENT_MAX_K:** Bounds for the agent's retry loop and dynamic top-k.
 *   **CHUNKING_STRATEGY:** Default ingestion chunking strategy (`auto`, `recursive`, or `semantic`).
-*   **LLM_MODEL / LLM_BASE_URL:** Local Ollama model used for planning, grading, and answers.
+*   **LLM_MODEL / LLM_BASE_URL:** Local Ollama model used for planning, grading, and answers (env `DOCSEEK_LLM_MODEL`; default `phi3:mini`, pull a stronger model like `qwen3:8b` for richer generation).
 *   **STT_MODEL:** faster-whisper model size for dictation (env `DOCSEEK_STT_MODEL`; default `small`).
 *   **TTS_VOICE_A / TTS_VOICE_B:** Kokoro voices for the two podcast hosts (env `DOCSEEK_TTS_VOICE_A`/`_B`).
+*   **RESEARCH_MAX_SECTIONS:** upper bound on sections in a deep research report.
 
 ## ✅ Testing
 

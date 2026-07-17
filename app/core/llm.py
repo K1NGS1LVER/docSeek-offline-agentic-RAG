@@ -134,6 +134,33 @@ class OllamaLLM:
 
         return "\n\n".join(parts)
 
+    async def stream_complete(self, system: str, user: str):
+        """Stream a general chat completion token by token.
+
+        Used by the research report writer (each section is streamed as it is
+        written). Yields text deltas; on failure yields a single inline error
+        string, mirroring stream_answer, so callers degrade gracefully instead
+        of raising mid-stream.
+        """
+        try:
+            stream = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=LLM_TEMPERATURE,
+                max_tokens=LLM_MAX_TOKENS,
+                stream=True,
+                extra_body={"keep_alive": LLM_KEEP_ALIVE},
+            )
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+        except Exception as e:
+            logger.error(f"LLM streaming error: {e}")
+            yield f"\n\n⚠️ Error communicating with Ollama: {str(e)}\n"
+
     async def stream_answer(self, query: str, context: str):
         """
         Stream an LLM answer given a user query and retrieved context.

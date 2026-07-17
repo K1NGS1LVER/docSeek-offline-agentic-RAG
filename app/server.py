@@ -33,7 +33,7 @@ from app.core.config import (
     RERANK_CANDIDATE_FACTOR,
     CHUNKING_STRATEGY,
 )
-from app.core import database, parsing, chunking, reranker, stt, podcast
+from app.core import database, parsing, chunking, reranker, stt, podcast, research
 from app.core.engine import VectorEngine
 from app.core.llm import OllamaLLM
 from app.core.fusion import reciprocal_rank_fusion
@@ -689,6 +689,50 @@ async def ask(request: AskRequest):
 
         except Exception as e:
             logger.error(f"ASK endpoint error: {e}")
+            yield {"data": json.dumps(f"⚠️ Server error: {str(e)}")}
+
+    return EventSourceResponse(event_stream())
+
+
+# ============================================================================
+# RESEARCH (DEEP RESEARCH REPORT)
+# ============================================================================
+
+
+class ResearchRequest(BaseModel):
+    query: str
+    # Restrict retrieval to these sources (filenames as returned by /documents).
+    source_files: Optional[List[str]] = None
+
+
+@app.post("/research")
+async def deep_research(request: ResearchRequest):
+    """Deep research report, streamed over SSE with the exact same typed events
+    as /ask: `trace` (one per graph node/section), `sources` (all cited chunks),
+    then unnamed events carrying JSON-encoded report-text deltas."""
+
+    async def event_stream():
+        try:
+            if engine.get_total_vectors() == 0:
+                yield {"data": json.dumps(
+                    "No documents have been uploaded yet. Please upload some documents first."
+                )}
+                return
+
+            def retrieve(query: str, k: int) -> List[Dict[str, Any]]:
+                return _retrieve_and_filter(query, k, request.source_files)
+
+            graph = research.ResearchGraph(llm=llm, retrieve_fn=retrieve)
+            logger.info(f"RESEARCH '{request.query}' streaming report...")
+            async for kind, payload in graph.run(request.query, request.source_files):
+                if kind == "trace":
+                    yield {"event": "trace", "data": json.dumps(payload)}
+                elif kind == "sources":
+                    yield {"event": "sources", "data": json.dumps(payload)}
+                elif kind == "delta":
+                    yield {"data": json.dumps(payload)}
+        except Exception as e:
+            logger.error(f"RESEARCH endpoint error: {e}")
             yield {"data": json.dumps(f"⚠️ Server error: {str(e)}")}
 
     return EventSourceResponse(event_stream())

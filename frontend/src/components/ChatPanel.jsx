@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX } from 'lucide-react';
+import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { search, ask, transcribe, synthesizeSpeech, getDocumentViewUrl } from '../lib/api';
+import { search, ask, research, transcribe, synthesizeSpeech, getDocumentViewUrl } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
 import { Segmented, Chip } from './ui';
 
@@ -189,6 +189,18 @@ function AgentTrace({ trace, isStreaming }) {
   );
 }
 
+/* Download a report as a .md file. */
+function downloadMarkdown(title, text) {
+  const name = `${(title || 'research-report').replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 60)}.md`;
+  const blob = new Blob([text], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 /* ── Markdown with [n] rendered as citation chips ──── */
 function AnswerMarkdown({ text, sources }) {
   // Bare [n] markers (not markdown links) become internal #cite-n links,
@@ -330,6 +342,7 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
   const submitQuery = async (query) => {
     if (!query.trim() || isSearching || selectedCount === 0) return;
     if (mode === 'ask') await handleAsk(query.trim());
+    else if (mode === 'research') await handleResearch(query.trim());
     else await performSearch(query.trim());
   };
 
@@ -406,6 +419,52 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
     }
   };
 
+  const handleResearch = async (query) => {
+    setMessages((prev) => [...prev, { type: 'query', text: query, ts: Date.now() }]);
+    setInput('');
+    setIsSearching(true);
+    addLog(`Research: "${query}"`);
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        type: 'answer', query, text: '', trace: [], sources: [],
+        isStreaming: true, isReport: true, ts: Date.now(),
+      },
+    ]);
+
+    const updateLast = (patch) => {
+      setMessages((prev) => {
+        const updated = [...prev];
+        const lastIdx = updated.length - 1;
+        updated[lastIdx] = { ...updated[lastIdx], ...patch(updated[lastIdx]) };
+        return updated;
+      });
+    };
+
+    try {
+      const { data, latency } = await research(
+        query,
+        (chunk) => updateLast(() => ({ text: chunk, isStreaming: true })),
+        {
+          sourceFiles: sourceFilter,
+          onTrace: (ev) => {
+            addLog(`Research [${ev.stage}] ${ev.message}`);
+            updateLast((msg) => ({ trace: [...(msg.trace || []), ev] }));
+          },
+          onSources: (sources) => updateLast(() => ({ sources })),
+        }
+      );
+      updateLast(() => ({ text: data, isStreaming: false, latency }));
+      addLog(`Report ready in ${latency}ms`);
+    } catch (err) {
+      setMessages((prev) => [...prev, { type: 'error', text: err.message, ts: Date.now() }]);
+      addLog(`Research error: ${err.message}`, 'ERROR');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
   const canType = selectedCount > 0;
 
   return (
@@ -421,7 +480,9 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
                 <p className="text-sm text-text-dim leading-relaxed mb-6">
                   <b className="text-text font-medium">Ask</b> streams an answer grounded in the
                   sources you selected — the agent plans, retrieves, and grades its own evidence.{' '}
-                  <b className="text-text font-medium">Search</b> returns the raw matching chunks.
+                  <b className="text-text font-medium">Search</b> returns the raw matching chunks.{' '}
+                  <b className="text-text font-medium">Research</b> writes a longer, structured report
+                  with citations.
                 </p>
                 {totalSources > 0 && (
                   <div className="flex flex-wrap justify-center gap-2">
@@ -482,6 +543,15 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
                             >
                               Save to note
                             </Chip>
+                            {msg.isReport && (
+                              <Chip
+                                icon={Download}
+                                onClick={() => downloadMarkdown(msg.query, msg.text)}
+                                title="Download this report as Markdown"
+                              >
+                                Download .md
+                              </Chip>
+                            )}
                             <SpeakButton text={msg.text} />
                           </>
                         )}
@@ -543,7 +613,15 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder={canType ? 'Ask your sources…' : 'Select at least one source to ask'}
+            placeholder={
+              !canType
+                ? 'Select at least one source'
+                : mode === 'research'
+                ? 'Research a question across your sources…'
+                : mode === 'search'
+                ? 'Search your sources…'
+                : 'Ask your sources…'
+            }
             disabled={isSearching || !canType}
             className="flex-1 min-w-0 bg-transparent text-base text-text placeholder:text-text-muted focus:outline-none disabled:text-disabled-fg"
           />
@@ -554,6 +632,7 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
               options={[
                 { value: 'ask', label: 'Ask' },
                 { value: 'search', label: 'Search' },
+                { value: 'research', label: 'Research' },
               ]}
             />
           </div>

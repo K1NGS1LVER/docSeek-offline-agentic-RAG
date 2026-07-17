@@ -39,7 +39,10 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 # LLM Settings (Ollama). DOCSEEK_LLM_BASE_URL overrides for tests and
 # non-default Ollama setups.
 LLM_BASE_URL = os.environ.get("DOCSEEK_LLM_BASE_URL", "http://localhost:11434/v1")
-LLM_MODEL = "phi3:mini"
+# phi3:mini is fine for planning/grading JSON, but too weak for podcast scripts
+# and research reports. Pull a stronger local model (e.g. `qwen3:8b` or
+# `llama3.1:8b`) and set DOCSEEK_LLM_MODEL to use it; nothing hard-depends on it.
+LLM_MODEL = os.environ.get("DOCSEEK_LLM_MODEL", "phi3:mini")
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 1024
 
@@ -109,3 +112,6 @@ TTS_VOICE_B = os.environ.get("DOCSEEK_TTS_VOICE_B", "am_michael")
 # Generated podcast WAVs + their JSON metadata sidecars live here.
 AUDIO_DIR = DATA_DIR / "audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+
+# Upper bound on sections in a deep research report.
+RESEARCH_MAX_SECTIONS = 6
