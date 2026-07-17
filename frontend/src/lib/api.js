@@ -169,6 +169,51 @@ export async function synthesizeSpeech(text, voice = null) {
   return URL.createObjectURL(blob);
 }
 
+/**
+ * Read a piece of text aloud, streaming raw mono float32 PCM (24kHz) as it's
+ * synthesized so playback can start well before the whole answer is ready.
+ * Calls onSamples(Float32Array) for each decoded block; resolves when the
+ * stream ends. Pass `signal` to cancel synthesis early (e.g. on Stop).
+ */
+export async function streamSpeech(text, { voice = null, signal, onSamples } = {}) {
+  const res = await fetch(`${BASE}/tts/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice }),
+    signal,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Read-aloud failed: HTTP ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  // Bytes carried over between chunks so a float32 sample never splits
+  // across a chunk boundary (4 bytes per sample).
+  let remainder = new Uint8Array(0);
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value || value.length === 0) continue;
+
+    let bytes = value;
+    if (remainder.length) {
+      bytes = new Uint8Array(remainder.length + value.length);
+      bytes.set(remainder, 0);
+      bytes.set(value, remainder.length);
+    }
+
+    const usableLen = bytes.length - (bytes.length % 4);
+    remainder = bytes.slice(usableLen);
+    if (usableLen === 0) continue;
+
+    const samples = new Float32Array(bytes.buffer, bytes.byteOffset, usableLen / 4);
+    // Copy out of the (possibly reused) underlying buffer before handing off.
+    if (onSamples) onSamples(new Float32Array(samples));
+  }
+}
+
 /* ── Search / Query ──────────────────────────────────── */
 
 export async function search(query, k = 5, rerank = false, sourceFiles = null) {

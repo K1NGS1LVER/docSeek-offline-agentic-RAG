@@ -1,3 +1,4 @@
+import asyncio
 import os
 import pathlib
 import logging
@@ -8,9 +9,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, File, Form, UploadFile, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
-from starlette.concurrency import run_in_threadpool
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from pydantic import BaseModel
 import uvicorn
 
@@ -33,7 +34,7 @@ from app.core.config import (
     RERANK_CANDIDATE_FACTOR,
     CHUNKING_STRATEGY,
 )
-from app.core import database, parsing, chunking, reranker, stt, podcast, research
+from app.core import database, parsing, chunking, reranker, stt, tts, podcast, research
 from app.core.engine import VectorEngine
 from app.core.llm import OllamaLLM
 from app.core.fusion import reciprocal_rank_fusion
@@ -242,6 +243,12 @@ async def lifespan(app: FastAPI):
     engine = VectorEngine()
     llm = OllamaLLM()
     await llm.warmup()
+
+    # Fire-and-forget: warm the TTS pipeline in the background so it doesn't
+    # delay server startup, but the first "Listen" click of the session
+    # doesn't pay Kokoro's cold-load cost. A TTS warmup failure is logged by
+    # tts.warmup() itself and must never affect startup.
+    asyncio.create_task(run_in_threadpool(tts.warmup))
 
     # Auto-rebuild index if DB has documents but FAISS is empty
     db_count = database.get_document_count()
@@ -900,10 +907,10 @@ async def text_to_speech(request: TTSRequest):
     """Read a short piece of text aloud (single voice), returned as a WAV.
 
     Powers the answer read-aloud button; reuses the same local Kokoro model as
-    the podcast pipeline.
+    the podcast pipeline. Prefer POST /tts/stream for lower time-to-first-audio;
+    this whole-file endpoint remains for callers that need a single WAV blob.
     """
     import io
-    from app.core import tts as tts_module
     import soundfile as sf
 
     text = (request.text or "").strip()
@@ -912,17 +919,17 @@ async def text_to_speech(request: TTSRequest):
     # Guard against very long inputs monopolizing the model.
     text = text[:2000]
 
-    voice = request.voice or tts_module.VOICE_A
+    voice = request.voice or tts.VOICE_A
 
     def _render():
         # Returns (status, bytes): "ok" | "unavailable" | "empty".
-        audio = tts_module.synthesize(text, voice)
+        audio = tts.synthesize(text, voice)
         if audio is None:
             return "unavailable", b""
         if audio.size == 0:
             return "empty", b""
         buf = io.BytesIO()
-        sf.write(buf, audio, tts_module.SAMPLE_RATE, format="WAV")
+        sf.write(buf, audio, tts.SAMPLE_RATE, format="WAV")
         return "ok", buf.getvalue()
 
     status, wav_bytes = await run_in_threadpool(_render)
@@ -939,6 +946,35 @@ async def text_to_speech(request: TTSRequest):
     from fastapi.responses import Response
 
     return Response(content=wav_bytes, media_type="audio/wav")
+
+
+@app.post("/tts/stream")
+async def text_to_speech_stream(request: TTSRequest):
+    """Read a short piece of text aloud, streaming raw PCM as it's synthesized.
+
+    Same input contract as POST /tts, but yields audio incrementally (mono
+    float32 samples at tts.SAMPLE_RATE, no container/header) so playback can
+    start after the first sentence instead of waiting for the whole answer.
+    """
+    text = (request.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No text to speak")
+    text = text[:2000]
+    voice = request.voice or tts.VOICE_A
+
+    if not await run_in_threadpool(tts.is_available):
+        raise HTTPException(
+            status_code=503,
+            detail="Local text-to-speech (Kokoro) is unavailable. The model "
+            "downloads once on first use; check server logs.",
+        )
+
+    async def _pcm_chunks():
+        async for segment in iterate_in_threadpool(tts.synthesize_stream(text, voice)):
+            if segment.size:
+                yield segment.tobytes()
+
+    return StreamingResponse(_pcm_chunks(), media_type="application/octet-stream")
 
 
 # ============================================================================

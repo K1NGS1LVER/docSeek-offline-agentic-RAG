@@ -17,7 +17,7 @@ import logging
 import re
 import threading
 import unicodedata
-from typing import List, Optional
+from typing import Iterator, List, Optional
 
 import numpy as np
 
@@ -62,6 +62,23 @@ def _get_pipeline():
 def is_available() -> bool:
     """True if text-to-speech can be used (loads the pipeline on first call)."""
     return _get_pipeline() is not None
+
+
+def warmup() -> None:
+    """Pay the pipeline's cold-start cost eagerly (call once, off the request path).
+
+    Loading the pipeline alone doesn't warm every code path (torch kernel
+    selection, G2P caching, etc.), so we also synthesize a throwaway phrase.
+    Never raises: a warmup failure just means the first real request pays the
+    cost instead, same as before this existed.
+    """
+    pipeline = _get_pipeline()
+    if pipeline is None:
+        return
+    try:
+        _run(pipeline, "Ready.", VOICE_A)
+    except Exception as e:
+        logger.warning(f"TTS warmup synthesis failed (non-fatal): {e}")
 
 
 def _sanitize(text: str) -> str:
@@ -120,3 +137,32 @@ def synthesize(text: str, voice: str) -> Optional[np.ndarray]:
     if not segments:
         return np.zeros(0, dtype=np.float32)
     return np.concatenate(segments)
+
+
+def synthesize_stream(text: str, voice: str) -> Iterator[np.ndarray]:
+    """Like synthesize(), but yields each mono float32 segment as it is produced.
+
+    Kokoro's own pipeline() only splits on literal newlines and otherwise
+    batches up to ~510 phonemes (several sentences) per yielded segment, so
+    handing it a whole answer in one call would make the caller wait many
+    seconds for the first chunk -- most of a short answer's total synthesis
+    time. We split on sentence boundaries ourselves so the first segment is
+    ready almost immediately; this also means a G2P failure only ever costs
+    one sentence, with no risk of duplicate audio on retry.
+    """
+    pipeline = _get_pipeline()
+    if pipeline is None:
+        return
+    text = _sanitize(text)
+    if not text:
+        return
+
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        try:
+            for segment in _run(pipeline, sentence, voice):
+                yield segment
+        except Exception as e:
+            logger.warning(f"TTS skipped an unsynthesizable passage: {e}")
