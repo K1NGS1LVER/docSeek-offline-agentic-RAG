@@ -101,13 +101,14 @@ def download_webpage(url: str) -> str:
 # INGESTION FUNCTIONS
 # ============================================================================
 
-def ingest_text(text: str, metadata: str = None) -> dict:
+def ingest_text(text: str, metadata: str = None, notebook_id: str = None) -> dict:
     response = requests.post(
-        f"{RAG_API_URL}/ingest", json={"text": text, "metadata": metadata}
+        f"{RAG_API_URL}/ingest",
+        json={"text": text, "metadata": metadata, "notebook_id": notebook_id},
     )
     return response.json()
 
-def ingest_file(filepath: str):
+def ingest_file(filepath: str, notebook_id: str):
     print(f"Processing: {filepath}")
 
     ext = Path(filepath).suffix.lower()
@@ -150,7 +151,7 @@ def ingest_file(filepath: str):
         }
 
         try:
-            ingest_text(chunk, json.dumps(metadata))
+            ingest_text(chunk, json.dumps(metadata), notebook_id)
             ingested += 1
         except Exception as e:
             print(f"  ❌ Error ingesting chunk {i+1}: {e}")
@@ -158,7 +159,7 @@ def ingest_file(filepath: str):
     print(f"  ✅ Ingested {ingested}/{len(chunks)} chunks\n")
     return ingested
 
-def ingest_directory(directory: str, pattern: str = "**/*.md", max_files: int = None):
+def ingest_directory(directory: str, pattern: str = "**/*.md", max_files: int = None, notebook_id: str = None):
     print(f"\n🔍 Scanning directory: {directory}")
     print(f"Pattern: {pattern}\n")
 
@@ -181,7 +182,7 @@ def ingest_directory(directory: str, pattern: str = "**/*.md", max_files: int = 
     for idx, filepath in enumerate(files, 1):
         print(f"[{idx}/{len(files)}] ", end="")
         try:
-            chunks = ingest_file(filepath)
+            chunks = ingest_file(filepath, notebook_id)
             total_chunks += chunks
         except requests.exceptions.ConnectionError:
             print(f"  ❌ Cannot connect to RAG server at {RAG_API_URL}")
@@ -201,7 +202,7 @@ def ingest_directory(directory: str, pattern: str = "**/*.md", max_files: int = 
     print(f"Time elapsed: {elapsed:.2f}s")
     print(f"{'='*60}\n")
 
-def ingest_urls(urls: List[str]):
+def ingest_urls(urls: List[str], notebook_id: str = None):
     print(f"\n🌐 Downloading {len(urls)} webpages\n")
     total_chunks = 0
 
@@ -228,7 +229,7 @@ def ingest_urls(urls: List[str]):
                     "end_char": end_char
                 }
 
-                ingest_text(chunk, json.dumps(metadata))
+                ingest_text(chunk, json.dumps(metadata), notebook_id)
                 total_chunks += 1
 
             print(f"  ✅ Ingested {len(chunks)} chunks\n")
@@ -240,21 +241,30 @@ def ingest_urls(urls: List[str]):
     print(f"\n✅ Total chunks ingested: {total_chunks}\n")
 
 if __name__ == "__main__":
-    import sys
+    import argparse
+
     print("\n" + "=" * 60)
     print("📚 RAG Documentation Ingestion Tool")
     print("=" * 60)
 
-    if len(sys.argv) < 2:
-        print("\nUsage:")
-        print("  python app/ingest.py <directory>")
-        print("  python app/ingest.py <directory> **/*.md")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        prog="python -m app.ingest",
+        description="Bulk-ingest documentation into the RAG system.",
+    )
+    parser.add_argument("--notebook", required=True, help="Target notebook id")
+    parser.add_argument("--url", help="Ingest a single webpage instead of a directory")
+    parser.add_argument("directory", nargs="?", help="Directory to scan for files")
+    parser.add_argument(
+        "pattern", nargs="?", default="**/*.md", help="Glob pattern (default: **/*.md)"
+    )
+    parser.add_argument(
+        "max_files", nargs="?", type=int, default=None, help="Limit number of files"
+    )
+    args = parser.parse_args()
 
-    if sys.argv[1] == "--url":
-        ingest_urls([sys.argv[2]])
+    if args.url:
+        ingest_urls([args.url], args.notebook)
+    elif args.directory:
+        ingest_directory(args.directory, args.pattern, args.max_files, args.notebook)
     else:
-        directory = sys.argv[1]
-        pattern = sys.argv[2] if len(sys.argv) > 2 else "**/*.md"
-        max_files = int(sys.argv[3]) if len(sys.argv) > 3 else None
-        ingest_directory(directory, pattern, max_files)
+        parser.error("either --url or a directory must be given")
