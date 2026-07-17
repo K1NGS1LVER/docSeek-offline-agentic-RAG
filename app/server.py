@@ -39,7 +39,7 @@ from app.core.agent import RetrievalAgent
 # Per-notebook runtime registry (Step 2 below) needs these.
 from collections import namedtuple
 from app.core import notebooks, migration
-from app.core.config import db_path as nb_db_path, index_path as nb_index_path
+from app.core.config import db_path as nb_db_path, index_path as nb_index_path, upload_dir
 
 try:
     from docx import Document
@@ -96,21 +96,21 @@ def get_runtime(nb_id: str) -> Runtime:
 # ============================================================================
 
 
-def _safe_upload_path(filename: str) -> tuple[str, pathlib.Path]:
+def _safe_upload_path(filename: str, base_dir: pathlib.Path) -> tuple[str, pathlib.Path]:
     """Strip any directory components from a client-supplied filename and
-    resolve it strictly inside UPLOAD_DIR. Raises 400 on empty/unsafe names."""
+    resolve it strictly inside base_dir. Raises 400 on empty/unsafe names."""
     safe_name = os.path.basename(filename or "")
     if not safe_name or safe_name in (".", ".."):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    dest = (pathlib.Path(UPLOAD_DIR) / safe_name).resolve()
-    upload_root = pathlib.Path(UPLOAD_DIR).resolve()
+    dest = (pathlib.Path(base_dir) / safe_name).resolve()
+    upload_root = pathlib.Path(base_dir).resolve()
     if upload_root not in dest.parents and dest != upload_root:
         raise HTTPException(status_code=400, detail="Invalid filename")
     return safe_name, dest
 
 
 def _chunk_with_strategy(
-    text_content: str, strategy: Optional[str]
+    rt: "Runtime", text_content: str, strategy: Optional[str]
 ) -> tuple[list, str]:
     """Chunk text with the requested (or configured default) strategy.
 
@@ -123,7 +123,7 @@ def _chunk_with_strategy(
             status_code=400,
             detail=f"Unknown chunking strategy: {resolved}. Supported: {', '.join(chunking.STRATEGIES)}",
         )
-    return chunking.chunk_document(text_content, resolved, embed_fn=engine.embed_batch)
+    return chunking.chunk_document(text_content, resolved, embed_fn=rt.engine.embed_batch)
 
 
 def extract_text_from_docx(file_path: str) -> str:
@@ -194,7 +194,7 @@ def extract_text_from_upload(ext: str, content: bytes, file_path: pathlib.Path) 
 _ingest_lock = threading.Lock()
 
 
-def _persist_chunks(chunks, embeddings, safe_name, file_path, strategy_used, extra_meta=None):
+def _persist_chunks(rt: "Runtime", chunks, embeddings, safe_name, file_path, strategy_used, extra_meta=None):
     """Insert chunks + their embeddings under the ingest lock. Returns doc_ids.
 
     chunks are (text, start_char, end_char) tuples aligned with embeddings.
@@ -213,9 +213,9 @@ def _persist_chunks(chunks, embeddings, safe_name, file_path, strategy_used, ext
             }
             if extra_meta:
                 meta.update(extra_meta)
-            doc_ids.append(database.insert_document(chunk_text, json.dumps(meta)))
-        engine.add_to_index(embeddings, doc_ids=doc_ids)
-        engine.save()
+            doc_ids.append(database.insert_document(rt.db_path, chunk_text, json.dumps(meta)))
+        rt.engine.add_to_index(embeddings, doc_ids=doc_ids)
+        rt.engine.save()
     return doc_ids
 
 
@@ -227,6 +227,7 @@ def _persist_chunks(chunks, embeddings, safe_name, file_path, strategy_used, ext
 class IngestRequest(BaseModel):
     text: str
     metadata: Optional[str] = None
+    notebook_id: str
 
 
 class SearchRequest(BaseModel):
@@ -236,6 +237,7 @@ class SearchRequest(BaseModel):
     # Restrict retrieval to these sources (filenames as returned by /documents).
     # None or empty means all sources.
     source_files: Optional[List[str]] = None
+    notebook_id: str
 
 
 class SearchResult(BaseModel):
@@ -390,14 +392,16 @@ async def del_notebook(nb_id: str):
 async def upload_file(
     file: UploadFile = File(...),
     chunking_strategy: Optional[str] = Form(None),
+    notebook_id: str = Form(...),
 ):
     """Upload and ingest a single document file (optimized with batch embedding)"""
     import time
 
     start_time = time.time()
+    rt = get_runtime(notebook_id)
 
     try:
-        safe_name, file_path = _safe_upload_path(file.filename)
+        safe_name, file_path = _safe_upload_path(file.filename, upload_dir(notebook_id))
         content = await file.read()
         if len(content) > MAX_UPLOAD_BYTES:
             raise HTTPException(
@@ -417,7 +421,7 @@ async def upload_file(
         # Chunk the content (returns tuples of (text, start_char, end_char)).
         # Run in a threadpool: semantic chunking embeds sentences (CPU-heavy).
         chunks, strategy_used = await run_in_threadpool(
-            _chunk_with_strategy, text_content, chunking_strategy
+            _chunk_with_strategy, rt, text_content, chunking_strategy
         )
 
         if not chunks:
@@ -433,7 +437,7 @@ async def upload_file(
         chunk_texts = [chunk_text for chunk_text, _, _ in chunks]
 
         embed_start = time.time()
-        embeddings = await run_in_threadpool(engine.embed_batch, chunk_texts)
+        embeddings = await run_in_threadpool(rt.engine.embed_batch, chunk_texts)
         embed_time = time.time() - embed_start
         logger.info(
             f"✅ Embedded {len(chunks)} chunks in {embed_time:.2f}s ({len(chunks) / embed_time:.0f} chunks/sec)"
@@ -443,7 +447,7 @@ async def upload_file(
         # lock (in a threadpool) so concurrent uploads can't corrupt the index;
         # everything above (parse/OCR/embed) already ran outside the lock.
         doc_ids = await run_in_threadpool(
-            _persist_chunks, chunks, embeddings, safe_name, file_path, strategy_used
+            _persist_chunks, rt, chunks, embeddings, safe_name, file_path, strategy_used
         )
 
         elapsed = time.time() - start_time
@@ -472,18 +476,21 @@ async def upload_file(
 async def upload_multiple_files(
     files: list[UploadFile] = File(...),
     chunking_strategy: Optional[str] = Form(None),
+    notebook_id: str = Form(...),
 ):
     """Upload and ingest multiple documents at once (optimized batch processing)"""
     import time
 
     start_time = time.time()
+    rt = get_runtime(notebook_id)
+    base_dir = upload_dir(notebook_id)
 
     results = []
     total_chunks = 0
 
     for file in files:
         try:
-            safe_name, file_path = _safe_upload_path(file.filename)
+            safe_name, file_path = _safe_upload_path(file.filename, base_dir)
             content = await file.read()
             if len(content) > MAX_UPLOAD_BYTES:
                 results.append(
@@ -516,7 +523,7 @@ async def upload_multiple_files(
 
             # Chunk the content
             chunks, strategy_used = await run_in_threadpool(
-                _chunk_with_strategy, text_content, chunking_strategy
+                _chunk_with_strategy, rt, text_content, chunking_strategy
             )
 
             if not chunks:
@@ -531,11 +538,11 @@ async def upload_multiple_files(
 
             # Batch embed all chunks for this file
             chunk_texts = [chunk_text for chunk_text, _, _ in chunks]
-            embeddings = await run_in_threadpool(engine.embed_batch, chunk_texts)
+            embeddings = await run_in_threadpool(rt.engine.embed_batch, chunk_texts)
 
             # Persist under the ingest lock (safe against concurrent uploads).
             await run_in_threadpool(
-                _persist_chunks, chunks, embeddings, safe_name, file_path, strategy_used
+                _persist_chunks, rt, chunks, embeddings, safe_name, file_path, strategy_used
             )
 
             total_chunks += len(chunks)
@@ -574,10 +581,11 @@ async def upload_multiple_files(
 
 @app.post("/ingest")
 def ingest_document(request: IngestRequest):
-    vector = engine.embed(request.text)
-    doc_id = database.insert_document(request.text, request.metadata)
-    engine.add_to_index(vector, doc_ids=[doc_id])
-    engine.save()  # Persist index changes to disk
+    rt = get_runtime(request.notebook_id)
+    vector = rt.engine.embed(request.text)
+    doc_id = database.insert_document(rt.db_path, request.text, request.metadata)
+    rt.engine.add_to_index(vector, doc_ids=[doc_id])
+    rt.engine.save()  # Persist index changes to disk
     return {"status": "success", "id": doc_id}
 
 
@@ -586,7 +594,7 @@ SIMILARITY_THRESHOLD = 0.20  # Minimum cosine similarity score to return a resul
 
 
 def _retrieve_and_filter(
-    query: str, k: int, source_files: Optional[List[str]] = None
+    rt: "Runtime", query: str, k: int, source_files: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
     """Shared retrieval + relevance-filtering logic for /search and /ask.
 
@@ -602,17 +610,17 @@ def _retrieve_and_filter(
 
     Returns a list of dicts: {"id", "score", "content", "source"}.
     """
-    if engine.get_total_vectors() == 0:
+    if rt.engine.get_total_vectors() == 0:
         return []
 
     allowed_ids: Optional[set] = None
     if source_files:
-        allowed_ids = set(database.get_ids_for_sources(source_files))
+        allowed_ids = set(database.get_ids_for_sources(rt.db_path, source_files))
         if not allowed_ids:
             return []
 
-    query_vector = engine.embed(query)
-    top_indices, scores = engine.search(query_vector, k, allowed_ids=allowed_ids)
+    query_vector = rt.engine.embed(query)
+    top_indices, scores = rt.engine.search(query_vector, k, allowed_ids=allowed_ids)
 
     # Dense scores keyed by id (used for the returned score + threshold).
     dense_scores = {
@@ -623,7 +631,7 @@ def _retrieve_and_filter(
 
     if HYBRID_SEARCH:
         dense_ids = [int(i) for i in top_indices if i != -1]
-        kw_ids = database.keyword_search(query, k)
+        kw_ids = database.keyword_search(rt.db_path, query, k)
         if allowed_ids is not None:
             kw_ids = [i for i in kw_ids if i in allowed_ids]
         ordered_ids = reciprocal_rank_fusion([dense_ids, kw_ids], k=RRF_K)[:k]
@@ -633,7 +641,7 @@ def _retrieve_and_filter(
     if not ordered_ids:
         return []
 
-    documents = database.fetch_documents_by_ids(ordered_ids)
+    documents = database.fetch_documents_by_ids(rt.db_path, ordered_ids)
     doc_map = {doc["id"]: doc for doc in documents}
 
     results = []
@@ -649,7 +657,7 @@ def _retrieve_and_filter(
             score = 0.0
         elif score < SIMILARITY_THRESHOLD:
             # Drop weak dense-only hits, but keep if keyword also matched (hybrid only).
-            if not HYBRID_SEARCH or doc_id not in database.keyword_search(query, k):
+            if not HYBRID_SEARCH or doc_id not in database.keyword_search(rt.db_path, query, k):
                 continue
         source_data = None
         if doc.get("metadata"):
@@ -665,13 +673,14 @@ def _retrieve_and_filter(
 
 @app.post("/search", response_model=List[SearchResult])
 def search(request: SearchRequest):
+    rt = get_runtime(request.notebook_id)
     if request.rerank:
         # Over-fetch candidates, rescore with the local cross-encoder, cut to k.
         fetch_k = min(request.k * RERANK_CANDIDATE_FACTOR, 30)
-        results = _retrieve_and_filter(request.query, fetch_k, request.source_files)
+        results = _retrieve_and_filter(rt, request.query, fetch_k, request.source_files)
         results = reranker.rerank(request.query, results)[: request.k]
     else:
-        results = _retrieve_and_filter(request.query, request.k, request.source_files)
+        results = _retrieve_and_filter(rt, request.query, request.k, request.source_files)
     logger.info(
         f"Search '{request.query}' hybrid={HYBRID_SEARCH} rerank={request.rerank} "
         f"-> {len(results)} results"
@@ -692,6 +701,7 @@ class AskRequest(BaseModel):
     agentic: Optional[bool] = None
     # Restrict retrieval to these sources (filenames as returned by /documents).
     source_files: Optional[List[str]] = None
+    notebook_id: str
 
 
 @app.post("/ask")
@@ -702,18 +712,19 @@ async def ask(request: AskRequest):
     - event "sources": the final retrieved chunks used as context
     - default events:  JSON-encoded answer text deltas (unchanged framing)
     """
+    rt = get_runtime(request.notebook_id)
     use_agent = AGENTIC_RAG if request.agentic is None else request.agentic
 
     async def event_stream():
         try:
-            if engine.get_total_vectors() == 0:
+            if rt.engine.get_total_vectors() == 0:
                 yield {"data": json.dumps(
                     "No documents have been uploaded yet. Please upload some documents first."
                 )}
                 return
 
             def retrieve(query: str, k: int) -> List[Dict[str, Any]]:
-                return _retrieve_and_filter(query, k, request.source_files)
+                return _retrieve_and_filter(rt, query, k, request.source_files)
 
             if use_agent:
                 agent = RetrievalAgent(llm=llm, retrieve_fn=retrieve)
@@ -770,6 +781,7 @@ class ResearchRequest(BaseModel):
     query: str
     # Restrict retrieval to these sources (filenames as returned by /documents).
     source_files: Optional[List[str]] = None
+    notebook_id: str
 
 
 @app.post("/research")
@@ -778,16 +790,18 @@ async def deep_research(request: ResearchRequest):
     as /ask: `trace` (one per graph node/section), `sources` (all cited chunks),
     then unnamed events carrying JSON-encoded report-text deltas."""
 
+    rt = get_runtime(request.notebook_id)
+
     async def event_stream():
         try:
-            if engine.get_total_vectors() == 0:
+            if rt.engine.get_total_vectors() == 0:
                 yield {"data": json.dumps(
                     "No documents have been uploaded yet. Please upload some documents first."
                 )}
                 return
 
             def retrieve(query: str, k: int) -> List[Dict[str, Any]]:
-                return _retrieve_and_filter(query, k, request.source_files)
+                return _retrieve_and_filter(rt, query, k, request.source_files)
 
             graph = research.ResearchGraph(llm=llm, retrieve_fn=retrieve)
             logger.info(f"RESEARCH '{request.query}' streaming report...")
@@ -1045,6 +1059,7 @@ async def text_to_speech_stream(request: TTSRequest):
 @app.get("/document/view", response_class=HTMLResponse)
 def view_document(
     id: int = Query(..., description="Document chunk ID from the database"),
+    notebook_id: str = Query(...),
 ):
     """View the FULL original document, with the clicked chunk highlighted.
 
@@ -1054,8 +1069,10 @@ def view_document(
     """
     import html as html_module
 
+    rt = get_runtime(notebook_id)
+
     # 1. Fetch the target chunk
-    doc = database.fetch_document_by_id(id)
+    doc = database.fetch_document_by_id(rt.db_path, id)
     if doc is None:
         logger.warning(f"Document view: id={id} not found in database")
         raise HTTPException(status_code=404, detail=f"Document with id={id} not found")
@@ -1080,7 +1097,7 @@ def view_document(
 
     # 3. If we know the source_file, fetch ALL sibling chunks for the full doc
     if source_file:
-        siblings = database.fetch_chunks_by_source(source_file)
+        siblings = database.fetch_chunks_by_source(rt.db_path, source_file)
     else:
         # Fallback: just show this single chunk
         siblings = [doc]
@@ -1367,9 +1384,10 @@ def ingest_github(request: GitHubIngestRequest):
 
 
 @app.get("/documents")
-def list_documents():
+def list_documents(notebook_id: str = Query(...)):
     """Return list of uploaded document filenames"""
-    all_metadata = database.get_all_metadata()
+    rt = get_runtime(notebook_id)
+    all_metadata = database.get_all_metadata(rt.db_path)
     files = set()
 
     for m in all_metadata:
@@ -1387,11 +1405,12 @@ def list_documents():
 
 
 @app.get("/sources")
-def list_sources():
+def list_sources(notebook_id: str = Query(...)):
     """Rich source listing for the workspace UI: one row per source file with
     its display name, chunk count, chunking strategy, and a chunk id usable
     with /document/view."""
-    rows = database.list_sources()
+    rt = get_runtime(notebook_id)
+    rows = database.list_sources(rt.db_path)
     sources = []
     for row in rows:
         meta = {}
@@ -1418,12 +1437,14 @@ def list_sources():
 @app.delete("/documents")
 def delete_document(
     source_file: str = Query(..., description="source_file value to delete"),
+    notebook_id: str = Query(...),
     _: None = Depends(require_admin),
 ):
     """Delete all chunks for a given source_file from both DB and index."""
-    ids = database.delete_documents_by_source(source_file)
-    removed = engine.remove_ids(ids) if ids else 0
-    engine.save()
+    rt = get_runtime(notebook_id)
+    ids = database.delete_documents_by_source(rt.db_path, source_file)
+    removed = rt.engine.remove_ids(ids) if ids else 0
+    rt.engine.save()
     return {"status": "success", "deleted": removed, "db_rows": len(ids)}
 
 
@@ -1446,10 +1467,11 @@ def get_ingest_status():
 
 
 @app.get("/stats")
-def get_stats():
+def get_stats(notebook_id: str = Query(...)):
+    rt = get_runtime(notebook_id)
     return {
-        "total_documents": database.get_document_count(),
-        "total_vectors": engine.get_total_vectors(),
+        "total_documents": database.get_document_count(rt.db_path),
+        "total_vectors": rt.engine.get_total_vectors(),
         "model": MODEL_NAME,
         "dimension": EMBEDDING_DIM,
         "index_type": "IndexFlatIP (Cosine Similarity)",
@@ -1461,24 +1483,28 @@ def get_stats():
 
 
 @app.delete("/reset")
-def reset_system(_: None = Depends(require_admin)):
-    global engine
+def reset_system(notebook_id: str = Query(...), _: None = Depends(require_admin)):
+    rt = get_runtime(notebook_id)
 
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
-    if os.path.exists(INDEX_PATH):
-        os.remove(INDEX_PATH)
+    if os.path.exists(rt.db_path):
+        os.remove(rt.db_path)
+    if os.path.exists(nb_index_path(notebook_id)):
+        os.remove(nb_index_path(notebook_id))
 
-    database.init_db()
-    engine = VectorEngine()
+    database.init_db(nb_db_path(notebook_id))
+    with _runtimes_lock:
+        _runtimes[notebook_id] = Runtime(
+            db_path=nb_db_path(notebook_id), engine=VectorEngine(nb_index_path(notebook_id))
+        )
 
     return {"status": "System reset successfully"}
 
 
 @app.post("/rebuild")
-def rebuild_index(_: None = Depends(require_admin)):
+async def rebuild_index(notebook_id: str = Query(...), _: None = Depends(require_admin)):
     """Rebuild the FAISS index from all documents in the database"""
-    count = _rebuild_index()
+    rt = get_runtime(notebook_id)
+    count = await run_in_threadpool(_rebuild_runtime, rt)
     return {"status": "success", "documents_indexed": count}
 
 
