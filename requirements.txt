@@ -17,4 +17,6 @@ python-pptx
 pypdfium2
 pytesseract
 openai
+json-repair
 sse-starlette
+langgraph

@@ -1,29 +1,40 @@
 """
-Agentic retrieval controller.
+Agentic retrieval controller, orchestrated as a LangGraph StateGraph.
 
 For each question the agent runs a bounded observe/decide/act loop, entirely
 on-device (decisions via the local Ollama model, reranking via a local
-cross-encoder):
+cross-encoder). LangGraph is pure orchestration -- it makes no network calls
+of its own -- so adopting it preserves docSeek's local-first privacy story.
 
-1. PLAN    — classify the query and choose the retrieval knobs: top-k,
-             query rewrite, decomposition into sub-queries, and whether the
-             cross-encoder rerank is worth the latency.
-2. RETRIEVE— hybrid dense+keyword retrieval per (sub-)query, RRF-fused.
-3. RERANK  — optional cross-encoder rescoring of an over-fetched candidate set.
-4. GRADE   — judge whether the evidence actually answers the question.
-5. RE-LOOP — if evidence is weak, reformulate the query, widen k, retry
-             (at most MAX_AGENT_LOOPS extra passes).
+The graph:
+
+    plan -> retrieve -> (rerank?) -> grade --> loop -> retrieve ...
+                                           `--> END
+
+1. PLAN     — classify the query and choose the retrieval knobs: top-k,
+              query rewrite, decomposition into sub-queries, and whether the
+              cross-encoder rerank is worth the latency.
+2. RETRIEVE — hybrid dense+keyword retrieval per (sub-)query, RRF-fused.
+3. RERANK   — optional cross-encoder rescoring of an over-fetched candidate set.
+4. GRADE    — merge into the running best set and judge whether the evidence
+              actually answers the question.
+5. LOOP     — if evidence is weak, reformulate the query, widen k, retry
+              (at most MAX_AGENT_LOOPS extra passes).
 
 Every LLM decision has a deterministic heuristic fallback, so when Ollama is
 unreachable the pipeline degrades to plain hybrid retrieval instead of failing.
 
-run() is an async generator yielding trace events (so the UI can show the
-agent thinking) followed by a final {"type": "results", ...} event.
+run() stays an async generator yielding trace events (so the UI can show the
+agent thinking) followed by a final {"type": "results", ...} event; nodes emit
+those trace events through LangGraph's custom stream writer. The wire contract
+is unchanged from the previous hand-rolled loop.
 """
 
 import logging
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, TypedDict
 
+from langgraph.config import get_stream_writer
+from langgraph.graph import END, START, StateGraph
 from starlette.concurrency import run_in_threadpool
 
 from . import reranker
@@ -71,10 +82,27 @@ def _clamp_k(k: Any, default: int) -> int:
         return default
 
 
+class AgentState(TypedDict, total=False):
+    """Shared state threaded through the retrieval graph."""
+
+    query: str                       # original user query
+    user_k: Optional[int]            # explicit k from the caller (wins over the plan)
+    plan: Dict[str, Any]
+    active_query: str                # current query (may be a rewrite/reformulation)
+    k: int                           # current final top-k
+    use_rerank: bool
+    best_by_id: Dict[int, Dict[str, Any]]   # running best chunk per id, across passes
+    candidates: List[Dict[str, Any]]        # this pass's retrieved (maybe reranked) chunks
+    results: List[Dict[str, Any]]           # current top-k best set
+    grade: Dict[str, Any]
+    iteration: int                   # 0-based pass index
+
+
 class RetrievalAgent:
     def __init__(self, llm: Optional[OllamaLLM], retrieve_fn: RetrieveFn):
         self.llm = llm
         self.retrieve_fn = retrieve_fn
+        self._graph = self._build_graph()
 
     # ------------------------------------------------------------------ plan
 
@@ -205,17 +233,15 @@ class RetrievalAgent:
             "grader": "llm",
         }
 
-    # ------------------------------------------------------------------ run
+    # -------------------------------------------------------------- graph nodes
 
-    async def run(
-        self, query: str, user_k: Optional[int] = None
-    ) -> AsyncIterator[Dict[str, Any]]:
-        """Run the agentic retrieval loop, yielding trace events then results."""
-
+    async def _plan_node(self, state: AgentState) -> Dict[str, Any]:
+        writer = get_stream_writer()
+        query, user_k = state["query"], state.get("user_k")
         plan = await self._plan(query, user_k)
         k = plan["k"]
         use_rerank = plan["rerank"] and reranker.is_available()
-        yield {
+        writer({
             "type": "trace", "stage": "plan",
             "message": f"{plan['query_type']} query → k={k}"
                        f"{', rerank' if use_rerank else ''}"
@@ -223,80 +249,163 @@ class RetrievalAgent:
                        f"{f', {len(plan['subqueries'])} subqueries' if plan['subqueries'] else ''}"
                        f" ({plan['planner']})",
             "data": plan,
+        })
+        return {
+            "plan": plan,
+            "k": k,
+            "use_rerank": use_rerank,
+            "active_query": plan["rewritten_query"] or query,
+            "best_by_id": {},
+            "results": [],
+            "grade": {},
+            "iteration": 0,
         }
 
-        active_query = plan["rewritten_query"] or query
-        best_by_id: Dict[int, Dict[str, Any]] = {}
-        results: List[Dict[str, Any]] = []
-        grade: Dict[str, Any] = {}
-        iterations = 0
+    async def _retrieve_node(self, state: AgentState) -> Dict[str, Any]:
+        writer = get_stream_writer()
+        plan, iteration = state["plan"], state["iteration"]
+        active_query, k, use_rerank = state["active_query"], state["k"], state["use_rerank"]
+        iterations = iteration + 1
+        queries = plan["subqueries"] if (iteration == 0 and plan["subqueries"]) else [active_query]
+        fetch_k = min(k * RERANK_CANDIDATE_FACTOR, MAX_RERANK_CANDIDATES) if use_rerank else k
 
-        for iteration in range(1 + MAX_AGENT_LOOPS):
-            iterations = iteration + 1
-            queries = plan["subqueries"] if (iteration == 0 and plan["subqueries"]) else [active_query]
-            fetch_k = min(k * RERANK_CANDIDATE_FACTOR, MAX_RERANK_CANDIDATES) if use_rerank else k
+        candidates = await self._retrieve(queries, fetch_k)
+        writer({
+            "type": "trace", "stage": "retrieve",
+            "message": f"pass {iterations}: {len(candidates)} candidates for "
+                       + (f"{len(queries)} subqueries" if len(queries) > 1 else f"'{queries[0]}'"),
+            "data": {"iteration": iterations, "queries": queries, "candidates": len(candidates)},
+        })
+        return {"candidates": candidates}
 
-            candidates = await self._retrieve(queries, fetch_k)
-            yield {
-                "type": "trace", "stage": "retrieve",
-                "message": f"pass {iterations}: {len(candidates)} candidates for "
-                           + (f"{len(queries)} subqueries" if len(queries) > 1 else f"'{queries[0]}'"),
-                "data": {"iteration": iterations, "queries": queries, "candidates": len(candidates)},
-            }
+    async def _rerank_node(self, state: AgentState) -> Dict[str, Any]:
+        writer = get_stream_writer()
+        candidates = await run_in_threadpool(
+            reranker.rerank, state["active_query"], state["candidates"]
+        )
+        writer({
+            "type": "trace", "stage": "rerank",
+            "message": f"cross-encoder reranked {len(candidates)} candidates",
+            "data": {"candidates": len(candidates)},
+        })
+        return {"candidates": candidates}
 
-            if use_rerank and candidates:
-                candidates = await run_in_threadpool(reranker.rerank, active_query, candidates)
-                yield {
-                    "type": "trace", "stage": "rerank",
-                    "message": f"cross-encoder reranked {len(candidates)} candidates",
-                    "data": {"candidates": len(candidates)},
-                }
+    async def _grade_node(self, state: AgentState) -> Dict[str, Any]:
+        writer = get_stream_writer()
+        k, iteration = state["k"], state["iteration"]
+        active_query = state["active_query"]
 
-            # Merge this pass into the running best set (dedupe by chunk id).
-            for r in candidates:
-                prev = best_by_id.get(r["id"])
-                if prev is None or r.get("rerank_score", r["score"]) > prev.get("rerank_score", prev["score"]):
-                    best_by_id[r["id"]] = r
-            results = sorted(
-                best_by_id.values(),
-                key=lambda r: r.get("rerank_score", r["score"]),
-                reverse=True,
-            )[:k]
+        # Merge this pass into the running best set (dedupe by chunk id).
+        best_by_id = dict(state["best_by_id"])
+        for r in state["candidates"]:
+            prev = best_by_id.get(r["id"])
+            if prev is None or r.get("rerank_score", r["score"]) > prev.get("rerank_score", prev["score"]):
+                best_by_id[r["id"]] = r
+        results = sorted(
+            best_by_id.values(),
+            key=lambda r: r.get("rerank_score", r["score"]),
+            reverse=True,
+        )[:k]
 
-            last_pass = iteration == MAX_AGENT_LOOPS
-            # LLM-grade only when a retry is still possible; the final pass
-            # gets the free heuristic grade for the trace.
-            grade = self._heuristic_grade(results) if last_pass else await self._grade(active_query, results)
-            yield {
-                "type": "trace", "stage": "grade",
-                "message": f"evidence {'sufficient' if grade['sufficient'] else 'insufficient'} "
-                           f"(confidence {grade['confidence']:.2f}, {grade['grader']})",
-                "data": grade,
-            }
+        last_pass = iteration == MAX_AGENT_LOOPS
+        # LLM-grade only when a retry is still possible; the final pass gets the
+        # free heuristic grade for the trace.
+        grade = self._heuristic_grade(results) if last_pass else await self._grade(active_query, results)
+        writer({
+            "type": "trace", "stage": "grade",
+            "message": f"evidence {'sufficient' if grade['sufficient'] else 'insufficient'} "
+                       f"(confidence {grade['confidence']:.2f}, {grade['grader']})",
+            "data": grade,
+        })
+        return {"best_by_id": best_by_id, "results": results, "grade": grade}
 
-            if grade["sufficient"] or last_pass:
-                break
+    async def _loop_node(self, state: AgentState) -> Dict[str, Any]:
+        """Reformulate and widen for another retrieval pass."""
+        writer = get_stream_writer()
+        grade, k = state["grade"], state["k"]
+        active_query = state["active_query"]
 
-            # Re-loop: reformulate and widen.
-            new_query = grade.get("better_query")
-            new_k = min(k + 4, AGENT_MAX_K)
-            if not new_query and new_k == k:
-                break  # nothing left to vary; another pass would be identical
-            if new_query:
-                active_query = new_query
-            k = new_k
-            yield {
-                "type": "trace", "stage": "loop",
-                "message": f"retrying with "
-                           + (f"query '{active_query}' and " if new_query else "")
-                           + f"k={k}",
-                "data": {"query": active_query, "k": k},
-            }
+        new_query = grade.get("better_query")
+        new_k = min(k + 4, AGENT_MAX_K)
+        if new_query:
+            active_query = new_query
+        writer({
+            "type": "trace", "stage": "loop",
+            "message": f"retrying with "
+                       + (f"query '{active_query}' and " if new_query else "")
+                       + f"k={new_k}",
+            "data": {"query": active_query, "k": new_k},
+        })
+        return {"active_query": active_query, "k": new_k, "iteration": state["iteration"] + 1}
+
+    # ------------------------------------------------------------- graph edges
+
+    @staticmethod
+    def _after_retrieve(state: AgentState) -> str:
+        """Rerank only when the plan asked for it and there is something to rerank."""
+        if state["use_rerank"] and state["candidates"]:
+            return "rerank"
+        return "grade"
+
+    @staticmethod
+    def _after_grade(state: AgentState) -> str:
+        """Stop when evidence is sufficient, the loop budget is spent, or another
+        pass would be identical (no reformulation and k can't widen)."""
+        grade, k, iteration = state["grade"], state["k"], state["iteration"]
+        last_pass = iteration == MAX_AGENT_LOOPS
+        if grade["sufficient"] or last_pass:
+            return END
+        new_query = grade.get("better_query")
+        new_k = min(k + 4, AGENT_MAX_K)
+        if not new_query and new_k == k:
+            return END
+        return "loop"
+
+    def _build_graph(self):
+        g = StateGraph(AgentState)
+        g.add_node("plan", self._plan_node)
+        g.add_node("retrieve", self._retrieve_node)
+        g.add_node("rerank", self._rerank_node)
+        g.add_node("grade", self._grade_node)
+        g.add_node("loop", self._loop_node)
+
+        g.add_edge(START, "plan")
+        g.add_edge("plan", "retrieve")
+        g.add_conditional_edges("retrieve", self._after_retrieve,
+                                {"rerank": "rerank", "grade": "grade"})
+        g.add_edge("rerank", "grade")
+        g.add_conditional_edges("grade", self._after_grade,
+                                {"loop": "loop", END: END})
+        g.add_edge("loop", "retrieve")
+        return g.compile()
+
+    # ------------------------------------------------------------------ run
+
+    async def run(
+        self, query: str, user_k: Optional[int] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Run the agentic retrieval loop, yielding trace events then results.
+
+        Streams the graph in "custom" mode (trace dicts written by the nodes)
+        plus "values" mode (so we can read the final accumulated state), then
+        emits the terminal {"type": "results", ...} event -- the exact wire
+        contract the previous hand-rolled loop produced.
+        """
+        initial: AgentState = {"query": query, "user_k": user_k}
+        final_state: Dict[str, Any] = {}
+
+        async for mode, chunk in self._graph.astream(
+            initial, stream_mode=["custom", "values"]
+        ):
+            if mode == "custom":
+                yield chunk
+            elif mode == "values":
+                final_state = chunk
 
         yield {
             "type": "results",
-            "results": results,
-            "plan": plan,
-            "grade": grade,
-            "iterations": iterations,
+            "results": final_state.get("results", []),
+            "plan": final_state.get("plan", {}),
+            "grade": final_state.get("grade", {}),
+            "iterations": final_state.get("iteration", 0) + 1,
         }

@@ -82,6 +82,18 @@ class OllamaLLM:
                     return json.loads(match.group(0))
                 except json.JSONDecodeError:
                     pass
+        # Small local models frequently emit loose or truncated JSON (e.g. the
+        # response hit the token limit mid-array). Repair it as a last resort
+        # rather than discarding an otherwise-usable structured answer.
+        try:
+            from json_repair import repair_json
+
+            repaired = repair_json(text, return_objects=True)
+            if isinstance(repaired, dict) and repaired:
+                logger.info("Recovered malformed LLM JSON via json-repair.")
+                return repaired
+        except Exception:
+            pass
         logger.warning(f"LLM returned unparseable JSON: {text[:200]!r}")
         return None
 
