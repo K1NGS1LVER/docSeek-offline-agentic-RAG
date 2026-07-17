@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from typing import List, Optional, Dict, Any
@@ -165,6 +166,52 @@ def fetch_chunks_by_source(source_file: str) -> List[Dict[str, Any]]:
         )
         rows = cursor.fetchall()
     return [{"id": row[0], "content": row[1], "metadata": row[2]} for row in rows]
+
+def get_ids_for_sources(source_files: List[str]) -> List[int]:
+    """All chunk ids belonging to the given sources.
+
+    Sources may be addressed by full source_file value, its basename, or the
+    metadata filename (they usually coincide; GitHub ingests differ)."""
+    allowed = set(source_files)
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, source_file, metadata FROM documents WHERE source_file IS NOT NULL"
+        )
+        rows = cursor.fetchall()
+    ids = []
+    for doc_id, source_file, metadata in rows:
+        names = {source_file, os.path.basename(source_file)}
+        if metadata:
+            try:
+                filename = json.loads(metadata).get("filename")
+                if filename:
+                    names.add(filename)
+            except Exception:
+                pass
+        if names & allowed:
+            ids.append(doc_id)
+    return ids
+
+def list_sources() -> List[Dict[str, Any]]:
+    """One row per source_file: chunk count, a representative chunk id, and a
+    metadata sample (from the source's first chunk)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT source_file, COUNT(*), MIN(id),
+                      (SELECT metadata FROM documents d2
+                        WHERE d2.source_file = d.source_file AND d2.metadata IS NOT NULL
+                        ORDER BY id LIMIT 1)
+               FROM documents d
+               WHERE source_file IS NOT NULL
+               GROUP BY source_file"""
+        )
+        rows = cursor.fetchall()
+    return [
+        {"source_file": r[0], "chunks": r[1], "first_chunk_id": r[2], "metadata": r[3]}
+        for r in rows
+    ]
 
 def delete_documents_by_source(source_file: str) -> List[int]:
     """Delete all chunks for a source_file. Returns the deleted ids."""

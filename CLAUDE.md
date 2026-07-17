@@ -60,14 +60,18 @@ npm run preview   # preview production build
 3. This DB-id-as-FAISS-id mapping (`faiss.IndexIDMap` wrapping `IndexFlatIP`) is the load-bearing design choice: search results map directly back to SQLite rows with no separate id-translation table. Any code that adds vectors without passing matching `doc_ids` will desync the index from the DB — `POST /rebuild` exists specifically to recover from that by re-embedding everything in SQLite and recreating the index from scratch.
 4. **Search** (`POST /search`): embeds the query, does a FAISS top-k search fused with BM25 keyword results (FTS5 + Reciprocal Rank Fusion, `HYBRID_SEARCH` flag), filters by `SIMILARITY_THRESHOLD = 0.20`, then fetches matching rows from SQLite by id and reassembles content + metadata (JSON blob with `source_file`, `filename`, `chunk_index`, `total_chunks`, `start_char`/`end_char`, `chunking`, optionally `github_repo`).
    Optional `rerank: true` over-fetches `k * RERANK_CANDIDATE_FACTOR` candidates and rescores them with the local cross-encoder (`app/core/reranker.py`, lazy-loaded) before cutting to k.
+   Optional `source_files` (also on `/ask`) scopes retrieval to the given sources: the matching chunk ids come from `database.get_ids_for_sources` (matches source_file, its basename, or the metadata filename), the dense search is restricted inside FAISS via `faiss.IDSelectorBatch` (never post-filtered, so a small source cannot be crowded out by a large one), and keyword hits are filtered to the same id set.
 5. **Ask** (`POST /ask`): the agentic pipeline (`app/core/agent.py`, `RetrievalAgent`).
    The agent plans the query with a local LLM JSON call (query type, dynamic k clamped to `AGENT_MIN_K..AGENT_MAX_K`, optional rewrite, optional sub-query decomposition, rerank decision), retrieves via the same `_retrieve_and_filter` as `/search` (multi-query results RRF-fused), optionally reranks, grades evidence sufficiency, and re-loops with a reformulated query and wider k up to `MAX_AGENT_LOOPS` extra passes.
    Every LLM decision has a deterministic heuristic fallback, so retrieval degrades to plain hybrid search when Ollama is unreachable.
    The response streams over SSE (`sse_starlette`) with typed events: `trace` (one per agent step), `sources` (final chunks), then unnamed events carrying JSON-encoded answer text deltas.
-   Request fields: `k: null` lets the agent pick, `agentic: false` bypasses the agent, and `AGENTIC_RAG` in config sets the default.
-   Context assembly (`OllamaLLM.build_context`) reorders chunks best-first/best-last to mitigate "lost in the middle".
+   Request fields: `k: null` lets the agent pick, `agentic: false` bypasses the agent, `source_files` scopes retrieval, and `AGENTIC_RAG` in config sets the default.
+   Context assembly (`OllamaLLM.build_context`) numbers each chunk `[n]` by its position in the `sources` event (so the model's inline `[n]` citations map 1:1 onto what the client received), then reorders chunks best-first/best-last to mitigate "lost in the middle".
+   The system prompt asks for those inline bracketed citations; the frontend renders them as clickable chips.
    `app/core/llm.py` talks to Ollama's OpenAI-compatible endpoint (`LLM_BASE_URL` in `config.py`); Ollama must be running locally with the configured model pulled, or streaming yields an inline error message instead of raising.
 6. **Document view** (`GET /document/view?id=`): given one chunk id, looks up all sibling chunks sharing the same `source_file` in their metadata (via a SQLite `LIKE` query, no real foreign key), sorts by `chunk_index`, and renders the full reconstructed document as HTML with the requested chunk highlighted.
+7. **Sources** (`GET /sources`): one row per source file (filename, chunk count, chunking strategy, `first_chunk_id` usable with `/document/view`), aggregated by `database.list_sources`.
+   This powers the workspace Sources panel; `GET /documents` (bare filename list) remains for compatibility, and `DELETE /documents?source_file=` deletes a whole source from both DB and index.
 
 ### Persistence and lifecycle
 

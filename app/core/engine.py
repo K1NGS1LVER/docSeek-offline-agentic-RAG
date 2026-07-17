@@ -102,15 +102,28 @@ class VectorEngine:
             logger.error(f"Failed to add {vectors.shape[0]} vectors to index: {e}")
             raise
 
-    def search(self, query_vector: np.ndarray, k: int = 5):
-        """Search for top-k nearest neighbors. Returns (doc_ids, scores)."""
+    def search(self, query_vector: np.ndarray, k: int = 5, allowed_ids=None):
+        """Search for top-k nearest neighbors. Returns (doc_ids, scores).
+
+        allowed_ids optionally restricts the search to those DB ids via a
+        FAISS IDSelector (applied to the mapped ids of the IndexIDMap), so
+        scoped retrieval never loses candidates to post-filtering."""
         try:
             query_vector = query_vector.astype("float32")
             with self._lock:
                 actual_k = min(k, self.index.ntotal) if self.index.ntotal > 0 else 0
                 if actual_k == 0:
                     return np.array([]), np.array([])
-                distances, indices = self.index.search(query_vector, actual_k)
+                if allowed_ids is not None:
+                    sel = faiss.IDSelectorBatch(
+                        np.asarray(sorted(allowed_ids), dtype=np.int64)
+                    )
+                    params = faiss.SearchParameters(sel=sel)
+                    distances, indices = self.index.search(
+                        query_vector, actual_k, params=params
+                    )
+                else:
+                    distances, indices = self.index.search(query_vector, actual_k)
             return indices[0], distances[0]
         except Exception as e:
             logger.error(f"Search failed (k={k}): {e}")

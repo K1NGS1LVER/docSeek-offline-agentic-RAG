@@ -128,6 +128,9 @@ class SearchRequest(BaseModel):
     query: str
     k: int = 5
     rerank: bool = False  # cross-encoder rescoring of an over-fetched candidate set
+    # Restrict retrieval to these sources (filenames as returned by /documents).
+    # None or empty means all sources.
+    source_files: Optional[List[str]] = None
 
 
 class SearchResult(BaseModel):
@@ -529,7 +532,9 @@ def ingest_document(request: IngestRequest):
 SIMILARITY_THRESHOLD = 0.20  # Minimum cosine similarity score to return a result
 
 
-def _retrieve_and_filter(query: str, k: int) -> List[Dict[str, Any]]:
+def _retrieve_and_filter(
+    query: str, k: int, source_files: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
     """Shared retrieval + relevance-filtering logic for /search and /ask.
 
     Runs dense search (and, if enabled, keyword search + RRF fusion), then
@@ -537,13 +542,24 @@ def _retrieve_and_filter(query: str, k: int) -> List[Dict[str, Any]]:
     is also a keyword match (hybrid only), or is a keyword-only hit (no
     dense score at all), in which case it's kept regardless of score.
 
+    If source_files is given, retrieval is scoped to those sources: the
+    dense search is restricted with a FAISS ID selector and keyword hits
+    are filtered to the same id set, so a small source can never be
+    crowded out of the candidate pool by a large one.
+
     Returns a list of dicts: {"id", "score", "content", "source"}.
     """
     if engine.get_total_vectors() == 0:
         return []
 
+    allowed_ids: Optional[set] = None
+    if source_files:
+        allowed_ids = set(database.get_ids_for_sources(source_files))
+        if not allowed_ids:
+            return []
+
     query_vector = engine.embed(query)
-    top_indices, scores = engine.search(query_vector, k)
+    top_indices, scores = engine.search(query_vector, k, allowed_ids=allowed_ids)
 
     # Dense scores keyed by id (used for the returned score + threshold).
     dense_scores = {
@@ -555,6 +571,8 @@ def _retrieve_and_filter(query: str, k: int) -> List[Dict[str, Any]]:
     if HYBRID_SEARCH:
         dense_ids = [int(i) for i in top_indices if i != -1]
         kw_ids = database.keyword_search(query, k)
+        if allowed_ids is not None:
+            kw_ids = [i for i in kw_ids if i in allowed_ids]
         ordered_ids = reciprocal_rank_fusion([dense_ids, kw_ids], k=RRF_K)[:k]
     else:
         ordered_ids = [int(i) for i in top_indices if i != -1]
@@ -597,10 +615,10 @@ def search(request: SearchRequest):
     if request.rerank:
         # Over-fetch candidates, rescore with the local cross-encoder, cut to k.
         fetch_k = min(request.k * RERANK_CANDIDATE_FACTOR, 30)
-        results = _retrieve_and_filter(request.query, fetch_k)
+        results = _retrieve_and_filter(request.query, fetch_k, request.source_files)
         results = reranker.rerank(request.query, results)[: request.k]
     else:
-        results = _retrieve_and_filter(request.query, request.k)
+        results = _retrieve_and_filter(request.query, request.k, request.source_files)
     logger.info(
         f"Search '{request.query}' hybrid={HYBRID_SEARCH} rerank={request.rerank} "
         f"-> {len(results)} results"
@@ -619,6 +637,8 @@ class AskRequest(BaseModel):
     k: Optional[int] = None
     # None -> config default (AGENTIC_RAG). False forces plain hybrid retrieval.
     agentic: Optional[bool] = None
+    # Restrict retrieval to these sources (filenames as returned by /documents).
+    source_files: Optional[List[str]] = None
 
 
 @app.post("/ask")
@@ -639,8 +659,11 @@ async def ask(request: AskRequest):
                 )}
                 return
 
+            def retrieve(query: str, k: int) -> List[Dict[str, Any]]:
+                return _retrieve_and_filter(query, k, request.source_files)
+
             if use_agent:
-                agent = RetrievalAgent(llm=llm, retrieve_fn=_retrieve_and_filter)
+                agent = RetrievalAgent(llm=llm, retrieve_fn=retrieve)
                 results = []
                 async for ev in agent.run(request.query, user_k=request.k):
                     if ev["type"] == "trace":
@@ -648,9 +671,7 @@ async def ask(request: AskRequest):
                     elif ev["type"] == "results":
                         results = ev["results"]
             else:
-                results = await run_in_threadpool(
-                    _retrieve_and_filter, request.query, request.k or 3
-                )
+                results = await run_in_threadpool(retrieve, request.query, request.k or 3)
 
             search_results = [
                 {
@@ -1034,6 +1055,35 @@ def list_documents():
             pass
 
     return list(files)
+
+
+@app.get("/sources")
+def list_sources():
+    """Rich source listing for the workspace UI: one row per source file with
+    its display name, chunk count, chunking strategy, and a chunk id usable
+    with /document/view."""
+    rows = database.list_sources()
+    sources = []
+    for row in rows:
+        meta = {}
+        if row.get("metadata"):
+            try:
+                meta = json.loads(row["metadata"])
+            except Exception:
+                meta = {}
+        sources.append(
+            {
+                "source_file": row["source_file"],
+                "filename": meta.get("filename")
+                or os.path.basename(row["source_file"]),
+                "chunks": row["chunks"],
+                "first_chunk_id": row["first_chunk_id"],
+                "chunking": meta.get("chunking"),
+                "github_repo": meta.get("github_repo"),
+            }
+        )
+    sources.sort(key=lambda s: s["filename"].lower())
+    return sources
 
 
 @app.delete("/documents")

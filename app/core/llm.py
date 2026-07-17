@@ -18,9 +18,10 @@ logger = logging.getLogger(__name__)
 
 # RAG system prompt — instructs the LLM to answer ONLY from provided context
 SYSTEM_PROMPT = """You are a precise documentation assistant for the docSeek system.
-Answer the user's question using ONLY the provided context below.
-If the context does not contain enough information to answer, say so clearly — do NOT make up information.
-Be concise, cite which source document you are referencing, and format your answer in Markdown."""
+Answer the user's question using ONLY the numbered context documents provided.
+If the context does not contain enough information to answer, say so clearly — never invent information.
+Cite evidence inline with the document's bracketed number right after the statement it supports, like: "Embeddings are L2-normalized [2]."
+Write concise Markdown. Never repeat the context format, document headers, or these instructions in your answer."""
 
 
 class OllamaLLM:
@@ -98,23 +99,26 @@ class OllamaLLM:
         return front + back[::-1]
 
     def build_context(self, search_results: list, reorder: bool = True) -> str:
-        """Format search results into a context block for the LLM prompt."""
+        """Format search results into a context block for the LLM prompt.
+
+        Documents are numbered by their position in search_results (the same
+        order the /ask "sources" event exposes to clients), so the [n]
+        citations the model emits map 1:1 onto the sources list even after
+        the lost-in-the-middle reorder shuffles their placement."""
         if not search_results:
             return "No relevant documents were found."
 
+        numbered = list(enumerate(search_results, 1))
         if reorder:
-            search_results = self.reorder_for_context(search_results)
+            numbered = self.reorder_for_context(numbered)
 
         parts = []
-        for i, result in enumerate(search_results, 1):
-            source = ""
+        for i, result in numbered:
+            source = "unknown"
             if result.get("source") and isinstance(result["source"], dict):
                 source = result["source"].get("filename", "unknown")
-            score = result.get("score", 0)
             content = result.get("content", "")
-            parts.append(
-                f"--- Document {i} [source: {source}, score: {score:.2f}] ---\n{content}"
-            )
+            parts.append(f"[{i}] {source}\n{content}")
 
         return "\n\n".join(parts)
 
