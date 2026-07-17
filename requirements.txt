@@ -8,5 +8,13 @@ requests
 beautifulsoup4
 python-multipart
 python-docx
+pypdf
+python-pptx
+# Scanned/image-only PDFs (no text layer) fall back to on-device OCR: pypdfium2
+# renders pages (bundles PDFium, no poppler needed) and Tesseract reads them.
+# The tesseract BINARY is a system dep -- `brew install tesseract` (macOS) /
+# `apt install tesseract-ocr` (Debian). Without it, OCR is skipped gracefully.
+pypdfium2
+pytesseract
 openai
 sse-starlette

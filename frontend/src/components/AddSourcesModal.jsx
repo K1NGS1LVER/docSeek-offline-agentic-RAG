@@ -97,15 +97,19 @@ export default function AddSourcesModal({ onClose }) {
     setQueue((q) => q.map((i) => (i.id === id ? { ...i, ...patch } : i)));
   const retryItem = (id) => updateItem(id, { status: 'queued', error: null });
 
+  // Upload several files at once. The backend serializes only the index write
+  // (parse/OCR/embed overlap), so a few parallel requests ingest much faster
+  // than a strict one-at-a-time loop, especially for PDFs.
+  const UPLOAD_CONCURRENCY = 4;
+
   const processQueue = async () => {
     setIsProcessing(true);
     const pending = queue.filter((i) => i.status === 'queued' || i.status === 'error');
 
-    for (const item of pending) {
-      updateItem(item.id, { status: 'uploading' });
+    const uploadOne = async (item) => {
+      updateItem(item.id, { status: 'indexing' });
       addLog(`Uploading ${item.file.name} (${strategy})...`);
       try {
-        updateItem(item.id, { status: 'indexing' });
         const { data } = await uploadFile(item.file, strategy === 'auto' ? null : strategy);
         updateItem(item.id, { status: 'indexed', chunks: data.chunks });
         addLog(`Indexed ${item.file.name}: ${data.chunks} chunks in ${data.time_seconds}s`);
@@ -113,7 +117,21 @@ export default function AddSourcesModal({ onClose }) {
         updateItem(item.id, { status: 'error', error: e.message });
         addLog(`Failed ${item.file.name}: ${e.message}`, 'ERROR');
       }
-    }
+    };
+
+    // A small pool of workers pulls from the pending list until it's drained.
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < pending.length) {
+        const item = pending[cursor++];
+        await uploadOne(item);
+      }
+    };
+    const workers = Array.from(
+      { length: Math.min(UPLOAD_CONCURRENCY, pending.length) },
+      worker
+    );
+    await Promise.all(workers);
 
     await refreshSources();
     await refreshStats();
@@ -173,13 +191,13 @@ export default function AddSourcesModal({ onClose }) {
           ref={fileRef}
           type="file"
           multiple
-          accept=".txt,.md,.markdown,.html,.htm,.docx"
+          accept=".txt,.md,.markdown,.html,.htm,.docx,.pdf,.pptx"
           onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
           className="hidden"
         />
         <ArrowUpFromLine className={`w-6 h-6 mx-auto ${dragOver ? 'text-accent' : 'text-accent/70'}`} />
         <p className="font-serif text-lg text-text mt-2 mb-1">Drop files or click to browse</p>
-        <p className="font-mono text-xs text-text-muted">.txt · .md · .html · .docx — up to 25 MB</p>
+        <p className="font-mono text-xs text-text-muted">.txt · .md · .html · .docx · .pdf · .pptx — up to 25 MB</p>
       </div>
 
       {/* Chunking strategy */}

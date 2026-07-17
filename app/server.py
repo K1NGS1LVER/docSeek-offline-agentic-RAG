@@ -114,6 +114,79 @@ def extract_text_from_docx(file_path: str) -> str:
         )
 
 
+# Every file type the upload endpoints can ingest.
+SUPPORTED_EXTENSIONS = {
+    ".txt", ".md", ".markdown", ".html", ".htm", ".docx", ".pdf", ".pptx",
+}
+
+
+def extract_text_from_upload(ext: str, content: bytes, file_path: pathlib.Path) -> str:
+    """Extract plain text from an uploaded file by extension.
+
+    `content` is the raw bytes; `file_path` is where they were saved (needed
+    for .docx, which python-docx reads from a path). Raises HTTPException(400)
+    on unsupported types or extraction failure.
+    """
+    ext = ext.lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ext}. Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
+        )
+    try:
+        if ext == ".docx":
+            return extract_text_from_docx(str(file_path))
+        if ext == ".pdf":
+            return parsing.parse_pdf(content)
+        if ext == ".pptx":
+            return parsing.parse_pptx(content)
+        if ext in (".html", ".htm"):
+            return parsing.parse_html(content.decode("utf-8", errors="replace"))
+        # .txt / .md / .markdown / anything else textual
+        text = content.decode("utf-8", errors="replace")
+        if ext in (".md", ".markdown"):
+            text = parsing.parse_markdown(text)
+        return text
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to extract text from {ext} file: {str(e)}"
+        )
+
+
+# Serializes the shared-state mutations of ingestion (SQLite inserts + FAISS
+# index add + save). Parsing, OCR, and embedding run OUTSIDE this lock, so those
+# (the slow parts) still overlap across parallel uploads; only the index writes
+# serialize, which keeps the FAISS index from being corrupted by concurrency.
+_ingest_lock = threading.Lock()
+
+
+def _persist_chunks(chunks, embeddings, safe_name, file_path, strategy_used, extra_meta=None):
+    """Insert chunks + their embeddings under the ingest lock. Returns doc_ids.
+
+    chunks are (text, start_char, end_char) tuples aligned with embeddings.
+    """
+    with _ingest_lock:
+        doc_ids = []
+        for i, (chunk_text, start_char, end_char) in enumerate(chunks):
+            meta = {
+                "source_file": str(file_path),
+                "chunk_index": i,
+                "total_chunks": len(chunks),
+                "filename": safe_name,
+                "start_char": start_char,
+                "end_char": end_char,
+                "chunking": strategy_used,
+            }
+            if extra_meta:
+                meta.update(extra_meta)
+            doc_ids.append(database.insert_document(chunk_text, json.dumps(meta)))
+        engine.add_to_index(embeddings, doc_ids=doc_ids)
+        engine.save()
+    return doc_ids
+
+
 # ============================================================================
 # PYDANTIC MODELS
 # ============================================================================
@@ -267,35 +340,11 @@ async def upload_file(
         with open(file_path, "wb") as f:
             f.write(content)
 
-        # Parse based on file extension
+        # Parse based on file extension (validates type, extracts text).
         ext = os.path.splitext(safe_name)[1].lower()
-
-        # Validate file type
-        supported_extensions = [".txt", ".md", ".markdown", ".html", ".htm", ".docx"]
-        if ext not in supported_extensions:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file type: {ext}. Supported: {', '.join(supported_extensions)}",
-            )
-
-        # Extract text based on file type
-        try:
-            if ext == ".docx":
-                # For .docx files, we need to extract from the saved file
-                text_content = extract_text_from_docx(str(file_path))
-            elif ext in [".txt", ".md", ".markdown"]:
-                text_content = content.decode("utf-8", errors="replace")
-                if ext in [".md", ".markdown"]:
-                    text_content = parsing.parse_markdown(text_content)
-            elif ext in [".html", ".htm"]:
-                text_content = content.decode("utf-8", errors="replace")
-                text_content = parsing.parse_html(text_content)
-            else:
-                text_content = content.decode("utf-8", errors="replace")
-        except Exception as e:
-            raise HTTPException(
-                status_code=400, detail=f"Failed to extract text from file: {str(e)}"
-            )
+        text_content = await run_in_threadpool(
+            extract_text_from_upload, ext, content, file_path
+        )
 
         # Chunk the content (returns tuples of (text, start_char, end_char)).
         # Run in a threadpool: semantic chunking embeds sentences (CPU-heavy).
@@ -322,29 +371,12 @@ async def upload_file(
             f"✅ Embedded {len(chunks)} chunks in {embed_time:.2f}s ({len(chunks) / embed_time:.0f} chunks/sec)"
         )
 
-        # Insert all chunks with their embeddings
-        doc_ids = []
-        for i, ((chunk_text, start_char, end_char), embedding) in enumerate(
-            zip(chunks, embeddings)
-        ):
-            metadata = json.dumps(
-                {
-                    "source_file": str(file_path),
-                    "chunk_index": i,
-                    "total_chunks": len(chunks),
-                    "filename": safe_name,
-                    "start_char": start_char,
-                    "end_char": end_char,
-                    "chunking": strategy_used,
-                }
-            )
-
-            doc_id = database.insert_document(chunk_text, metadata)
-            doc_ids.append(doc_id)
-
-        # Add all embeddings to index with their actual DB IDs
-        engine.add_to_index(embeddings, doc_ids=doc_ids)
-        engine.save()  # Persist index changes to disk
+        # Persist chunks + embeddings. The insert + FAISS add + save run under a
+        # lock (in a threadpool) so concurrent uploads can't corrupt the index;
+        # everything above (parse/OCR/embed) already ran outside the lock.
+        doc_ids = await run_in_threadpool(
+            _persist_chunks, chunks, embeddings, safe_name, file_path, strategy_used
+        )
 
         elapsed = time.time() - start_time
 
@@ -398,47 +430,18 @@ async def upload_multiple_files(
             with open(file_path, "wb") as f:
                 f.write(content)
 
-            # Parse based on file extension
+            # Parse based on file extension (validates type, extracts text).
             ext = os.path.splitext(safe_name)[1].lower()
-
-            # Validate file type
-            supported_extensions = [
-                ".txt",
-                ".md",
-                ".markdown",
-                ".html",
-                ".htm",
-                ".docx",
-            ]
-            if ext not in supported_extensions:
-                results.append(
-                    {
-                        "filename": safe_name,
-                        "status": "failed",
-                        "error": f"Unsupported file type: {ext}",
-                    }
-                )
-                continue
-
-            # Extract text based on file type
             try:
-                if ext == ".docx":
-                    text_content = extract_text_from_docx(str(file_path))
-                elif ext in [".txt", ".md", ".markdown"]:
-                    text_content = content.decode("utf-8", errors="replace")
-                    if ext in [".md", ".markdown"]:
-                        text_content = parsing.parse_markdown(text_content)
-                elif ext in [".html", ".htm"]:
-                    text_content = content.decode("utf-8", errors="replace")
-                    text_content = parsing.parse_html(text_content)
-                else:
-                    text_content = content.decode("utf-8", errors="replace")
-            except Exception as decode_error:
+                text_content = await run_in_threadpool(
+                    extract_text_from_upload, ext, content, file_path
+                )
+            except HTTPException as extract_error:
                 results.append(
                     {
                         "filename": safe_name,
                         "status": "failed",
-                        "error": f"Failed to decode: {str(decode_error)}",
+                        "error": extract_error.detail,
                     }
                 )
                 continue
@@ -462,28 +465,10 @@ async def upload_multiple_files(
             chunk_texts = [chunk_text for chunk_text, _, _ in chunks]
             embeddings = await run_in_threadpool(engine.embed_batch, chunk_texts)
 
-            # Insert all chunks with their embeddings
-            doc_ids = []
-            for i, ((chunk_text, start_char, end_char), embedding) in enumerate(
-                zip(chunks, embeddings)
-            ):
-                metadata = json.dumps(
-                    {
-                        "source_file": str(file_path),
-                        "chunk_index": i,
-                        "total_chunks": len(chunks),
-                        "filename": safe_name,
-                        "start_char": start_char,
-                        "end_char": end_char,
-                        "chunking": strategy_used,
-                    }
-                )
-
-                doc_id = database.insert_document(chunk_text, metadata)
-                doc_ids.append(doc_id)
-
-            # Add all embeddings to index with their actual DB IDs
-            engine.add_to_index(embeddings, doc_ids=doc_ids)
+            # Persist under the ingest lock (safe against concurrent uploads).
+            await run_in_threadpool(
+                _persist_chunks, chunks, embeddings, safe_name, file_path, strategy_used
+            )
 
             total_chunks += len(chunks)
             results.append(
@@ -502,8 +487,8 @@ async def upload_multiple_files(
             results.append(
                 {"filename": file.filename, "status": "failed", "error": str(e)}
             )
+        # Note: _persist_chunks already saved the index under the lock per file.
 
-        engine.save()  # Persist index changes to disk after batch completion
     elapsed = time.time() - start_time
     logger.info(
         f"✅ Batch upload complete: {len(files)} files, {total_chunks} total chunks in {elapsed:.2f}s"

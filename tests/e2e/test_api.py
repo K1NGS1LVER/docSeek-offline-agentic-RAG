@@ -46,6 +46,55 @@ def upload(server, filename, content, strategy=None):
     return requests.post(f"{server}/upload", files=files, data=data, timeout=TIMEOUT)
 
 
+def upload_bytes(server, filename, data, content_type):
+    """Upload raw binary content (for PDF/PPTX/DOCX)."""
+    files = {"file": (filename, data, content_type)}
+    return requests.post(f"{server}/upload", files=files, timeout=TIMEOUT)
+
+
+def make_pdf_bytes(text):
+    """A minimal but spec-correct single-page text PDF (no writer dependency)."""
+    objs = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R"
+        b"/Resources<</Font<</F1 5 0 R>>>>>>",
+    ]
+    stream = b"BT /F1 24 Tf 72 700 Td (" + text.encode() + b") Tj ET"
+    objs.append(b"<</Length " + str(len(stream)).encode() + b">>stream\n" + stream + b"\nendstream")
+    objs.append(b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>")
+    out = b"%PDF-1.4\n"
+    offsets = []
+    for i, body in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += str(i).encode() + b" 0 obj" + body + b"\nendobj\n"
+    xref_pos = len(out)
+    n = len(objs) + 1
+    out += b"xref\n0 " + str(n).encode() + b"\n0000000000 65535 f \n"
+    for off in offsets:
+        out += ("%010d 00000 n \n" % off).encode()
+    out += (b"trailer<</Size " + str(n).encode() + b"/Root 1 0 R>>\nstartxref\n"
+            + str(xref_pos).encode() + b"\n%%EOF")
+    return out
+
+
+def make_pptx_bytes(lines):
+    """A one-slide PowerPoint deck with the given text lines."""
+    import io
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank layout
+    tf = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(8), Inches(4)).text_frame
+    tf.text = lines[0]
+    for ln in lines[1:]:
+        tf.add_paragraph().text = ln
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
 def read_sse(resp, stop_after_event=None, stop_after_answer_chars=None):
     """Parse an SSE stream into (events, answer_text).
 
@@ -161,6 +210,27 @@ def test_upload_multiple(server):
     assert all(item["status"] == "success" for item in body["results"])
 
 
+def test_concurrent_uploads_keep_index_consistent(server):
+    """Parallel uploads must not corrupt the FAISS index: the ingest lock keeps
+    DB inserts and index adds in lockstep, so total_documents stays equal to
+    total_vectors even under concurrency."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def one(n):
+        return upload(
+            server, f"concurrent_{n}.txt",
+            f"Concurrent upload number {n} about widget calibration and gear ratios.",
+        )
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        responses = list(pool.map(one, range(6)))
+
+    assert all(r.status_code == 200 for r in responses), [r.text for r in responses]
+
+    stats = requests.get(f"{server}/stats", timeout=TIMEOUT).json()
+    assert stats["total_documents"] == stats["total_vectors"], stats
+
+
 def test_ingest_raw_text(server):
     r = requests.post(
         f"{server}/ingest",
@@ -169,6 +239,70 @@ def test_ingest_raw_text(server):
     )
     assert r.status_code == 200
     assert r.json()["id"] > 0
+
+
+def test_upload_pdf_extracts_and_indexes(server):
+    data = make_pdf_bytes("Photosynthesis converts sunlight into chemical energy in plants.")
+    r = upload_bytes(server, "biology.pdf", data, "application/pdf")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "success" and body["chunks"] >= 1
+
+    hits = requests.post(
+        f"{server}/search", json={"query": "photosynthesis sunlight energy", "k": 3}, timeout=TIMEOUT
+    ).json()
+    assert any("Photosynthesis" in h["content"] for h in hits)
+
+
+def test_upload_pptx_extracts_and_indexes(server):
+    data = make_pptx_bytes([
+        "Quarterly Business Review",
+        "Revenue grew twenty percent this quarter.",
+        "Cloud adoption accelerated across every region.",
+    ])
+    r = upload_bytes(
+        server, "deck.pptx", data,
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "success" and body["chunks"] >= 1
+
+    hits = requests.post(
+        f"{server}/search", json={"query": "quarterly revenue growth cloud", "k": 3}, timeout=TIMEOUT
+    ).json()
+    assert any("Revenue grew" in h["content"] for h in hits)
+
+
+def test_upload_scanned_pdf_ocr_or_clean_failure(server):
+    """A scanned (image-only) PDF has no text layer. With the OCR stack present
+    it ingests via the Tesseract fallback; without it, ingestion fails cleanly
+    (400, no content) rather than 500. Structural, like the other optional-model
+    tests -- passes with or without OCR installed."""
+    import io
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (1400, 220), "white")
+    draw = ImageDraw.Draw(img)
+    font = None
+    for path in (
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ):
+        try:
+            font = ImageFont.truetype(path, 60)
+            break
+        except Exception:
+            pass
+    draw.text((30, 70), "Photosynthesis powers plant growth",
+              fill="black", font=font or ImageFont.load_default())
+    buf = io.BytesIO()
+    img.save(buf, "PDF", resolution=150)
+
+    r = upload_bytes(server, "scanned.pdf", buf.getvalue(), "application/pdf")
+    assert r.status_code in (200, 400), r.text
+    if r.status_code == 200:
+        assert r.json()["chunks"] >= 1
 
 
 # --------------------------------------------------------------- search

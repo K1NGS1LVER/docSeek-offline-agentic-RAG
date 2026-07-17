@@ -9,6 +9,7 @@ Nothing leaves your machine (model weights are downloaded once from HuggingFace,
 *   **Agentic retrieval loop:** a local LLM agent plans each query (dynamic top-k, query rewriting, sub-query decomposition), decides whether to rerank, grades the retrieved evidence, and re-loops with a reformulated query when the evidence is weak (CRAG-style).
 *   **Hybrid search:** dense vectors (FAISS, `all-mpnet-base-v2`) fused with BM25 keyword search (SQLite FTS5) via Reciprocal Rank Fusion.
 *   **Local cross-encoder reranking:** `ms-marco-MiniLM-L-6-v2` rescores candidates on-device when the agent judges precision matters.
+*   **Broad file support:** ingest `.txt`, `.md`, `.html`, `.docx`, `.pdf`, and `.pptx`. Scanned/image-only PDFs are read via an on-device Tesseract OCR fallback.
 *   **Chunking strategies:** recursive (character/sentence-boundary), semantic (embedding-based topic-shift detection), or auto (per-document strategy selection).
 *   **Transparent decisions:** every agent step streams to the UI as a trace event, so you can watch it plan, retrieve, rerank, grade, and loop.
 *   **Graceful degradation:** if Ollama is down, deterministic heuristics take over and the system falls back to plain hybrid retrieval.
@@ -48,7 +49,7 @@ Nothing leaves your machine (model weights are downloaded once from HuggingFace,
 3.  **Install Dependencies:**
 
     ```bash
-    pip install fastapi uvicorn sentence-transformers faiss-cpu numpy requests beautifulsoup4 openai sse-starlette python-docx python-multipart pytest
+    pip install -r requirements.txt
     ```
 
 ## 🏁 Usage
@@ -70,7 +71,9 @@ Or backend only:
 *   Interactive Docs: `http://localhost:8000/docs`
 
 ### 2. Ingest Documentation
-You can ingest Markdown, Text, or HTML files recursively.
+Upload accepts `.txt`, `.md`, `.html`, `.docx`, `.pdf`, and `.pptx`. Scanned/image-only PDFs (no text layer) fall back to on-device Tesseract OCR — install the binary with `brew install tesseract` (macOS) or `apt install tesseract-ocr` (Debian); without it, OCR is skipped and text-layer PDFs still work.
+
+The CLI ingests Markdown, Text, or HTML files recursively.
 
 **Syntax:**
 ```bash

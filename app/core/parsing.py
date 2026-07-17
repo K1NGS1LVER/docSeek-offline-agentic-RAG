@@ -1,6 +1,10 @@
+import io
+import logging
 import re
 from typing import List, Tuple
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1000  # Characters per chunk (~200 tokens, well under mpnet's 384)
 CHUNK_OVERLAP = 150  # Overlap between chunks
@@ -64,6 +68,61 @@ def parse_html(content: str) -> str:
     for script in soup(["script", "style", "nav", "footer"]):
         script.decompose()
     return soup.get_text(separator="\n", strip=True)
+
+def parse_pdf(data: bytes) -> str:
+    """Extract text from a PDF, page by page.
+
+    Uses pypdf (pure Python). Text-layer PDFs extract cleanly; scanned/image
+    PDFs have no text layer and yield little or nothing (no OCR here).
+    """
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(data))
+    pages = []
+    for page in reader.pages:
+        try:
+            text = page.extract_text() or ""
+        except Exception:
+            text = ""
+        if text.strip():
+            pages.append(text.strip())
+    combined = clean_text("\n\n".join(pages))
+
+    # No text layer (scanned/image-only PDF): fall back to local OCR if available.
+    if not combined.strip():
+        from . import ocr
+
+        ocr_text = ocr.ocr_pdf(data)
+        if ocr_text.strip():
+            logger.info("PDF had no text layer; extracted text via local OCR fallback.")
+            return clean_text(ocr_text)
+    return combined
+
+
+def parse_pptx(data: bytes) -> str:
+    """Extract text from a PowerPoint deck: per-slide shape text and tables."""
+    from pptx import Presentation
+
+    prs = Presentation(io.BytesIO(data))
+    parts = []
+    for slide in prs.slides:
+        slide_lines = []
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    line = "".join(run.text for run in para.runs).strip()
+                    if line:
+                        slide_lines.append(line)
+            if shape.has_table:
+                for row in shape.table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        slide_lines.append(" | ".join(cells))
+        if slide_lines:
+            parts.append("\n".join(slide_lines))
+    # Blank line between slides keeps them as separate semantic blocks.
+    return clean_text("\n\n".join(parts))
+
 
 def clean_text(content: str) -> str:
     """General text cleaning"""

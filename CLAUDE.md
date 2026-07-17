@@ -53,7 +53,8 @@ npm run preview   # preview production build
 
 ### Data flow
 
-1. **Ingestion** (`POST /upload`, `/upload-multiple`, `/ingest`, `/ingest/github`, or the `app/ingest.py` CLI): raw files are parsed (`app/core/parsing.py`: markdown front-matter stripped, HTML reduced to text via BeautifulSoup), then chunked via `app/core/chunking.py`.
+1. **Ingestion** (`POST /upload`, `/upload-multiple`, `/ingest`, `/ingest/github`, or the `app/ingest.py` CLI): raw files are parsed (`app/core/parsing.py`), then chunked via `app/core/chunking.py`.
+   Supported upload types (`SUPPORTED_EXTENSIONS` in `server.py`, extracted by the single `extract_text_from_upload` helper used by both upload endpoints): `.txt`, `.md`/`.markdown` (front-matter stripped), `.html`/`.htm` (BeautifulSoup → text), `.docx` (python-docx), `.pdf` (pypdf text layer; scanned/image-only PDFs fall back to on-device Tesseract OCR via `app/core/ocr.py`, which lazily uses pypdfium2 + pytesseract and degrades gracefully when the tesseract binary is absent), and `.pptx` (python-pptx: per-slide shape text + tables).
    Three strategies: `recursive` (character budget, sentence/paragraph-boundary aware, `parsing.chunk_text`), `semantic` (sentences embedded with the local model, chunk boundaries at topic shifts where adjacent-sentence cosine distance exceeds a percentile threshold), and `auto` (default; profiles each document by length/code density/sentence count and picks per document).
    Upload endpoints accept an optional `chunking_strategy` form field; the strategy used is recorded in each chunk's metadata as `chunking`.
 2. Each chunk is embedded (`VectorEngine.embed_batch`, L2-normalized for cosine similarity), inserted into SQLite (`app/core/database.py`, table `documents`: id/content/metadata/created_at) to get a real DB row id, then added to the FAISS index **using that DB id** via `add_to_index(..., doc_ids=...)`.
