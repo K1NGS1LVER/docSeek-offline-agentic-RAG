@@ -16,8 +16,8 @@ function CreateNotebookModal({ onClose, onCreated }) {
     setCreating(true);
     setError('');
     try {
-      const created = await createNotebook(name.trim(), emoji.trim() || '📓');
-      onCreated(created);
+      const { data } = await createNotebook(name.trim(), emoji.trim() || '📓');
+      onCreated(data);
     } catch (e) {
       setError(e.message || 'Could not create notebook');
       setCreating(false);
@@ -69,8 +69,8 @@ export default function NotebooksPage({ theme, setTheme }) {
 
   const refresh = useCallback(async () => {
     try {
-      const rows = await listNotebooks();
-      setNotebooks(rows);
+      const { data } = await listNotebooks();
+      setNotebooks(data || []);
     } catch (e) {
       setError(e.message || 'Could not load notebooks');
       setNotebooks([]);
@@ -142,7 +142,7 @@ export default function NotebooksPage({ theme, setTheme }) {
           onClose={() => setCreating(false)}
           onCreated={(created) => {
             setCreating(false);
-            navigate(`/app/${created.id}`);
+            navigate(`/app/${created?.id}`);
           }}
         />
       )}

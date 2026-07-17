@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Pencil, Trash2, Loader2 } from 'lucide-react';
 import { renameNotebook, deleteNotebook } from '../lib/api';
@@ -65,12 +65,17 @@ export default function NotebookCard({ notebook, onChanged }) {
   const [renaming, setRenaming] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const confirmTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => clearTimeout(confirmTimerRef.current);
+  }, []);
 
   const handleDelete = async (e) => {
     e.stopPropagation();
     if (!confirming) {
       setConfirming(true);
-      setTimeout(() => setConfirming(false), 2500);
+      confirmTimerRef.current = setTimeout(() => setConfirming(false), 2500);
       return;
     }
     setDeleting(true);
@@ -95,7 +100,7 @@ export default function NotebookCard({ notebook, onChanged }) {
   return (
     <>
       <Card
-        className="group relative flex flex-col gap-3 p-5 cursor-pointer hover:border-accent transition-colors"
+        className="group relative flex flex-col gap-3 p-4 cursor-pointer hover:border-accent transition-colors"
         onClick={() => navigate(`/app/${notebook.id}`)}
       >
         <div className="flex items-start justify-between gap-2">
