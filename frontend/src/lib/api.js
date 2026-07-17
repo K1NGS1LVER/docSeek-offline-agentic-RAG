@@ -26,37 +26,57 @@ async function request(path, options = {}) {
   return { data, latency, status: res.status };
 }
 
-/* ── Health / System ─────────────────────────────────── */
+/* ── Notebooks ────────────────────────────────────────── */
 
-export async function getStats() {
-  return request('/stats');
+export function listNotebooks() {
+  return request('/notebooks');
 }
 
-export async function getDocuments() {
-  return request('/documents');
+export function createNotebook(name, emoji = '📓') {
+  return request('/notebooks', { method: 'POST', body: JSON.stringify({ name, emoji }) });
+}
+
+export function renameNotebook(id, name, emoji) {
+  return request(`/notebooks/${id}`, { method: 'PATCH', body: JSON.stringify({ name, emoji }) });
+}
+
+export function deleteNotebook(id) {
+  return request(`/notebooks/${id}`, { method: 'DELETE' });
+}
+
+/* ── Health / System ─────────────────────────────────── */
+
+export async function getStats(notebookId) {
+  return request(`/stats?notebook_id=${encodeURIComponent(notebookId)}`);
+}
+
+export async function getDocuments(notebookId) {
+  return request(`/documents?notebook_id=${encodeURIComponent(notebookId)}`);
 }
 
 /** Rich per-source listing: filename, chunk count, first_chunk_id, chunking. */
-export async function getSources() {
-  return request('/sources');
+export async function getSources(notebookId) {
+  return request(`/sources?notebook_id=${encodeURIComponent(notebookId)}`);
 }
 
 /** Delete every chunk belonging to a source file. */
-export async function deleteSource(sourceFile) {
-  return request(`/documents?source_file=${encodeURIComponent(sourceFile)}`, {
-    method: 'DELETE',
-  });
+export async function deleteSource(notebookId, sourceFile) {
+  return request(
+    `/documents?notebook_id=${encodeURIComponent(notebookId)}&source_file=${encodeURIComponent(sourceFile)}`,
+    { method: 'DELETE' },
+  );
 }
 
-export async function getIngestStatus() {
-  return request('/ingest/status');
+export async function getIngestStatus(notebookId) {
+  return request(`/ingest/status?notebook_id=${encodeURIComponent(notebookId)}`);
 }
 
 /* ── Document Ingestion ──────────────────────────────── */
 
-export async function uploadFile(file, chunkingStrategy = null) {
+export async function uploadFile(notebookId, file, chunkingStrategy = null) {
   const form = new FormData();
   form.append('file', file);
+  form.append('notebook_id', notebookId);
   if (chunkingStrategy) form.append('chunking_strategy', chunkingStrategy);
 
   const url = `${BASE}/upload`;
@@ -70,9 +90,10 @@ export async function uploadFile(file, chunkingStrategy = null) {
   return { data, latency };
 }
 
-export async function uploadMultiple(files) {
+export async function uploadMultiple(notebookId, files) {
   const form = new FormData();
   files.forEach((f) => form.append('files', f));
+  form.append('notebook_id', notebookId);
 
   const url = `${BASE}/upload-multiple`;
   const start = performance.now();
@@ -85,17 +106,17 @@ export async function uploadMultiple(files) {
   return { data, latency };
 }
 
-export async function ingestText(text, metadata = null) {
+export async function ingestText(notebookId, text, metadata = null) {
   return request('/ingest', {
     method: 'POST',
-    body: JSON.stringify({ text, metadata }),
+    body: JSON.stringify({ text, metadata, notebook_id: notebookId }),
   });
 }
 
-export async function ingestGithub(repoUrl, subpath = null) {
+export async function ingestGithub(notebookId, repoUrl, subpath = null) {
   return request('/ingest/github', {
     method: 'POST',
-    body: JSON.stringify({ repo_url: repoUrl, subpath }),
+    body: JSON.stringify({ repo_url: repoUrl, subpath, notebook_id: notebookId }),
   });
 }
 
@@ -129,26 +150,28 @@ export async function transcribe(blob) {
 /* ── Podcast (local audio overview) ──────────────────── */
 
 /** Start generating a two-host audio overview for the given sources. */
-export async function createPodcast(sourceFiles) {
+export async function createPodcast(notebookId, sourceFiles) {
   return request('/podcast', {
     method: 'POST',
-    body: JSON.stringify({ source_files: sourceFiles }),
+    body: JSON.stringify({ source_files: sourceFiles, notebook_id: notebookId }),
   });
 }
 
 /** Poll the status of a podcast generation job. */
-export async function getPodcastStatus(jobId) {
-  return request(`/podcast/status?job_id=${encodeURIComponent(jobId)}`);
+export async function getPodcastStatus(notebookId, jobId) {
+  return request(
+    `/podcast/status?job_id=${encodeURIComponent(jobId)}&notebook_id=${encodeURIComponent(notebookId)}`,
+  );
 }
 
 /** List all generated episodes, newest first. */
-export async function getPodcasts() {
-  return request('/podcasts');
+export async function getPodcasts(notebookId) {
+  return request(`/podcasts?notebook_id=${encodeURIComponent(notebookId)}`);
 }
 
 /** URL for the generated WAV of a completed episode. */
-export function getPodcastAudioUrl(jobId) {
-  return `${BASE}/podcast/audio?job_id=${encodeURIComponent(jobId)}`;
+export function getPodcastAudioUrl(notebookId, jobId) {
+  return `${BASE}/podcast/audio?job_id=${encodeURIComponent(jobId)}&notebook_id=${encodeURIComponent(notebookId)}`;
 }
 
 /**
@@ -216,10 +239,10 @@ export async function streamSpeech(text, { voice = null, signal, onSamples } = {
 
 /* ── Search / Query ──────────────────────────────────── */
 
-export async function search(query, k = 5, rerank = false, sourceFiles = null) {
+export async function search(notebookId, query, k = 5, rerank = false, sourceFiles = null) {
   return request('/search', {
     method: 'POST',
-    body: JSON.stringify({ query, k, rerank, source_files: sourceFiles }),
+    body: JSON.stringify({ query, k, rerank, source_files: sourceFiles, notebook_id: notebookId }),
   });
 }
 
@@ -231,17 +254,18 @@ export async function search(query, k = 5, rerank = false, sourceFiles = null) {
  * - "sources": the retrieved chunks used as context
  * - default:   JSON-encoded answer text deltas
  *
+ * @param {string} notebookId - The notebook to scope retrieval to
  * @param {string} query - The user's question
  * @param {number|null} k - Number of chunks to retrieve (null = agent decides)
  * @param {function} onChunk - Called with the accumulated answer text
  * @param {object} [handlers] - Optional { onTrace(event), onSources(list), agentic, sourceFiles }
  * @returns {Promise<{data: string, latency: number}>}
  */
-export async function ask(query, k = null, onChunk, handlers = {}) {
+export async function ask(notebookId, query, k = null, onChunk, handlers = {}) {
   const { onTrace, onSources, agentic = null, sourceFiles = null } = handlers;
   return streamTypedSSE({
     url: `${BASE}/ask`,
-    body: { query, k, agentic, source_files: sourceFiles },
+    body: { query, k, agentic, source_files: sourceFiles, notebook_id: notebookId },
     onChunk,
     onTrace,
     onSources,
@@ -253,16 +277,17 @@ export async function ask(query, k = null, onChunk, handlers = {}) {
  * protocol as {@link ask} (trace / sources / answer-text deltas), so it shares
  * the parser.
  *
+ * @param {string} notebookId - The notebook to scope retrieval to
  * @param {string} query - The research question
  * @param {function} onChunk - Called with the accumulated report markdown
  * @param {object} [handlers] - Optional { onTrace(event), onSources(list), sourceFiles }
  * @returns {Promise<{data: string, latency: number}>}
  */
-export async function research(query, onChunk, handlers = {}) {
+export async function research(notebookId, query, onChunk, handlers = {}) {
   const { onTrace, onSources, sourceFiles = null } = handlers;
   return streamTypedSSE({
     url: `${BASE}/research`,
-    body: { query, source_files: sourceFiles },
+    body: { query, source_files: sourceFiles, notebook_id: notebookId },
     onChunk,
     onTrace,
     onSources,
@@ -353,16 +378,16 @@ async function streamTypedSSE({ url, body, onChunk, onTrace, onSources }) {
 
 /* ── Index Management ────────────────────────────────── */
 
-export async function rebuildIndex() {
-  return request('/rebuild', { method: 'POST' });
+export async function rebuildIndex(notebookId) {
+  return request(`/rebuild?notebook_id=${encodeURIComponent(notebookId)}`, { method: 'POST' });
 }
 
-export async function resetSystem() {
-  return request('/reset', { method: 'DELETE' });
+export async function resetSystem(notebookId) {
+  return request(`/reset?notebook_id=${encodeURIComponent(notebookId)}`, { method: 'DELETE' });
 }
 
 /* ── Document View ───────────────────────────────────── */
 
-export function getDocumentViewUrl(docId) {
-  return `${BASE}/document/view?id=${docId}`;
+export function getDocumentViewUrl(notebookId, docId) {
+  return `${BASE}/document/view?id=${encodeURIComponent(docId)}&notebook_id=${encodeURIComponent(notebookId)}`;
 }
