@@ -40,16 +40,20 @@ DOC_PLANETS = (
 ) * 2
 
 
-def upload(server, filename, content, strategy=None):
+def upload(server, filename, content, strategy=None, *, notebook):
     files = {"file": (filename, content.encode())}
-    data = {"chunking_strategy": strategy} if strategy else {}
+    data = {"notebook_id": notebook}
+    if strategy:
+        data["chunking_strategy"] = strategy
     return requests.post(f"{server}/upload", files=files, data=data, timeout=TIMEOUT)
 
 
-def upload_bytes(server, filename, data, content_type):
+def upload_bytes(server, filename, data, content_type, *, notebook):
     """Upload raw binary content (for PDF/PPTX/DOCX)."""
     files = {"file": (filename, data, content_type)}
-    return requests.post(f"{server}/upload", files=files, timeout=TIMEOUT)
+    return requests.post(
+        f"{server}/upload", files=files, data={"notebook_id": notebook}, timeout=TIMEOUT
+    )
 
 
 def make_pdf_bytes(text):
@@ -139,10 +143,12 @@ def read_sse(resp, stop_after_event=None, stop_after_answer_chars=None):
 
 
 @pytest.fixture(scope="session")
-def corpus(server):
+def corpus(server, notebook):
     """Ingest the shared test corpus once; returns upload responses."""
-    agent_doc = upload(server, "agent_doc.txt", DOC_AGENT)
-    planets_doc = upload(server, "planets_and_bread.txt", DOC_PLANETS, strategy="semantic")
+    agent_doc = upload(server, "agent_doc.txt", DOC_AGENT, notebook=notebook)
+    planets_doc = upload(
+        server, "planets_and_bread.txt", DOC_PLANETS, strategy="semantic", notebook=notebook
+    )
     assert agent_doc.status_code == 200, agent_doc.text
     assert planets_doc.status_code == 200, planets_doc.text
     return {"agent_doc": agent_doc.json(), "planets_doc": planets_doc.json()}
@@ -151,8 +157,10 @@ def corpus(server):
 # ---------------------------------------------------------------- system
 
 
-def test_stats_reports_agentic_config(server):
-    stats = requests.get(f"{server}/stats", timeout=TIMEOUT).json()
+def test_stats_reports_agentic_config(server, notebook):
+    stats = requests.get(
+        f"{server}/stats", params={"notebook_id": notebook}, timeout=TIMEOUT
+    ).json()
     assert stats["agentic"] is True
     assert stats["hybrid_search"] is True
     assert "cross-encoder" in stats["reranker_model"]
@@ -160,10 +168,17 @@ def test_stats_reports_agentic_config(server):
 
 
 def test_ask_with_empty_corpus(server):
-    """Must run before any ingestion: the corpus fixture is instantiated by
-    the first test that requests it, and pytest executes in file order."""
+    """Uses its own fresh, empty notebook (rather than the shared session
+    `notebook`, which accumulates the shared corpus) so this assertion holds
+    regardless of test run order."""
+    nb = requests.post(
+        f"{server}/notebooks", json={"name": "Empty"}, timeout=TIMEOUT
+    ).json()["id"]
     resp = requests.post(
-        f"{server}/ask", json={"query": "anything"}, stream=True, timeout=TIMEOUT
+        f"{server}/ask",
+        json={"query": "anything", "notebook_id": nb},
+        stream=True,
+        timeout=TIMEOUT,
     )
     _, answer = read_sse(resp)
     assert "No documents have been uploaded yet" in answer
@@ -187,30 +202,31 @@ def test_upload_semantic_strategy(corpus):
     assert doc["chunks"] >= 2
 
 
-def test_upload_rejects_unknown_strategy(server):
-    r = upload(server, "bad_strategy.txt", "some text", strategy="quantum")
+def test_upload_rejects_unknown_strategy(server, notebook):
+    r = upload(server, "bad_strategy.txt", "some text", strategy="quantum", notebook=notebook)
     assert r.status_code == 400
     assert "chunking strategy" in r.json()["detail"].lower()
 
 
-def test_upload_rejects_unsupported_extension(server):
-    r = upload(server, "binary.exe", "not really a doc")
+def test_upload_rejects_unsupported_extension(server, notebook):
+    r = upload(server, "binary.exe", "not really a doc", notebook=notebook)
     assert r.status_code == 400
 
 
-def test_upload_multiple(server):
+def test_upload_multiple(server, notebook):
     files = [
         ("files", ("multi_a.txt", b"Alpha document about testing multiple uploads.")),
         ("files", ("multi_b.txt", b"Beta document about testing multiple uploads.")),
     ]
-    r = requests.post(f"{server}/upload-multiple", files=files, timeout=TIMEOUT)
+    data = {"notebook_id": notebook}
+    r = requests.post(f"{server}/upload-multiple", files=files, data=data, timeout=TIMEOUT)
     assert r.status_code == 200
     body = r.json()
     assert body["files_processed"] == 2
     assert all(item["status"] == "success" for item in body["results"])
 
 
-def test_concurrent_uploads_keep_index_consistent(server):
+def test_concurrent_uploads_keep_index_consistent(server, notebook):
     """Parallel uploads must not corrupt the FAISS index: the ingest lock keeps
     DB inserts and index adds in lockstep, so total_documents stays equal to
     total_vectors even under concurrency."""
@@ -220,6 +236,7 @@ def test_concurrent_uploads_keep_index_consistent(server):
         return upload(
             server, f"concurrent_{n}.txt",
             f"Concurrent upload number {n} about widget calibration and gear ratios.",
+            notebook=notebook,
         )
 
     with ThreadPoolExecutor(max_workers=6) as pool:
@@ -227,34 +244,41 @@ def test_concurrent_uploads_keep_index_consistent(server):
 
     assert all(r.status_code == 200 for r in responses), [r.text for r in responses]
 
-    stats = requests.get(f"{server}/stats", timeout=TIMEOUT).json()
+    stats = requests.get(
+        f"{server}/stats", params={"notebook_id": notebook}, timeout=TIMEOUT
+    ).json()
     assert stats["total_documents"] == stats["total_vectors"], stats
 
 
-def test_ingest_raw_text(server):
+def test_ingest_raw_text(server, notebook):
     r = requests.post(
         f"{server}/ingest",
-        json={"text": "Raw ingested snippet about xylophone maintenance."},
+        json={
+            "text": "Raw ingested snippet about xylophone maintenance.",
+            "notebook_id": notebook,
+        },
         timeout=TIMEOUT,
     )
     assert r.status_code == 200
     assert r.json()["id"] > 0
 
 
-def test_upload_pdf_extracts_and_indexes(server):
+def test_upload_pdf_extracts_and_indexes(server, notebook):
     data = make_pdf_bytes("Photosynthesis converts sunlight into chemical energy in plants.")
-    r = upload_bytes(server, "biology.pdf", data, "application/pdf")
+    r = upload_bytes(server, "biology.pdf", data, "application/pdf", notebook=notebook)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "success" and body["chunks"] >= 1
 
     hits = requests.post(
-        f"{server}/search", json={"query": "photosynthesis sunlight energy", "k": 3}, timeout=TIMEOUT
+        f"{server}/search",
+        json={"query": "photosynthesis sunlight energy", "k": 3, "notebook_id": notebook},
+        timeout=TIMEOUT,
     ).json()
     assert any("Photosynthesis" in h["content"] for h in hits)
 
 
-def test_upload_pptx_extracts_and_indexes(server):
+def test_upload_pptx_extracts_and_indexes(server, notebook):
     data = make_pptx_bytes([
         "Quarterly Business Review",
         "Revenue grew twenty percent this quarter.",
@@ -263,18 +287,21 @@ def test_upload_pptx_extracts_and_indexes(server):
     r = upload_bytes(
         server, "deck.pptx", data,
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        notebook=notebook,
     )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "success" and body["chunks"] >= 1
 
     hits = requests.post(
-        f"{server}/search", json={"query": "quarterly revenue growth cloud", "k": 3}, timeout=TIMEOUT
+        f"{server}/search",
+        json={"query": "quarterly revenue growth cloud", "k": 3, "notebook_id": notebook},
+        timeout=TIMEOUT,
     ).json()
     assert any("Revenue grew" in h["content"] for h in hits)
 
 
-def test_upload_scanned_pdf_ocr_or_clean_failure(server):
+def test_upload_scanned_pdf_ocr_or_clean_failure(server, notebook):
     """A scanned (image-only) PDF has no text layer. With the OCR stack present
     it ingests via the Tesseract fallback; without it, ingestion fails cleanly
     (400, no content) rather than 500. Structural, like the other optional-model
@@ -299,7 +326,7 @@ def test_upload_scanned_pdf_ocr_or_clean_failure(server):
     buf = io.BytesIO()
     img.save(buf, "PDF", resolution=150)
 
-    r = upload_bytes(server, "scanned.pdf", buf.getvalue(), "application/pdf")
+    r = upload_bytes(server, "scanned.pdf", buf.getvalue(), "application/pdf", notebook=notebook)
     assert r.status_code in (200, 400), r.text
     if r.status_code == 200:
         assert r.json()["chunks"] >= 1
@@ -308,10 +335,10 @@ def test_upload_scanned_pdf_ocr_or_clean_failure(server):
 # --------------------------------------------------------------- search
 
 
-def test_search_hybrid_finds_content(server, corpus):
+def test_search_hybrid_finds_content(server, corpus, notebook):
     r = requests.post(
         f"{server}/search",
-        json={"query": "which planet is the largest", "k": 3},
+        json={"query": "which planet is the largest", "k": 3, "notebook_id": notebook},
         timeout=TIMEOUT,
     )
     assert r.status_code == 200
@@ -322,10 +349,15 @@ def test_search_hybrid_finds_content(server, corpus):
         assert set(res) >= {"id", "score", "content", "source"}
 
 
-def test_search_rerank_scores_and_orders(server, corpus):
+def test_search_rerank_scores_and_orders(server, corpus, notebook):
     r = requests.post(
         f"{server}/search",
-        json={"query": "how does the agent decide what to retrieve", "k": 3, "rerank": True},
+        json={
+            "query": "how does the agent decide what to retrieve",
+            "k": 3,
+            "rerank": True,
+            "notebook_id": notebook,
+        },
         timeout=TIMEOUT,
     )
     assert r.status_code == 200
@@ -336,14 +368,14 @@ def test_search_rerank_scores_and_orders(server, corpus):
     assert scores == sorted(scores, reverse=True)
 
 
-def test_search_scores_respect_threshold_contract(server, corpus):
+def test_search_scores_respect_threshold_contract(server, corpus, notebook):
     """Weak dense-only hits are dropped; keyword-only hits surface score 0.0.
     An unrelated query may or may not clear the threshold (embedding
     similarity of arbitrary text is not bounded), so assert the score
     contract rather than emptiness."""
     r = requests.post(
         f"{server}/search",
-        json={"query": "zeppelin cactus harmonica blizzard", "k": 5},
+        json={"query": "zeppelin cactus harmonica blizzard", "k": 5, "notebook_id": notebook},
         timeout=TIMEOUT,
     )
     assert r.status_code == 200
@@ -354,10 +386,10 @@ def test_search_scores_respect_threshold_contract(server, corpus):
 # ------------------------------------------------------------------ ask
 
 
-def test_ask_agentic_streams_trace_and_sources(server, corpus):
+def test_ask_agentic_streams_trace_and_sources(server, corpus, notebook):
     resp = requests.post(
         f"{server}/ask",
-        json={"query": "How does docSeek protect user privacy?"},
+        json={"query": "How does docSeek protect user privacy?", "notebook_id": notebook},
         stream=True,
         timeout=TIMEOUT,
     )
@@ -379,10 +411,10 @@ def test_ask_agentic_streams_trace_and_sources(server, corpus):
         assert set(s) >= {"id", "content", "score", "source"}
 
 
-def test_ask_agentic_respects_explicit_k(server, corpus):
+def test_ask_agentic_respects_explicit_k(server, corpus, notebook):
     resp = requests.post(
         f"{server}/ask",
-        json={"query": "what is jupiter", "k": 2},
+        json={"query": "what is jupiter", "k": 2, "notebook_id": notebook},
         stream=True,
         timeout=TIMEOUT,
     )
@@ -395,10 +427,15 @@ def test_ask_agentic_respects_explicit_k(server, corpus):
     assert plans and plans[0]["data"]["k"] == 2
 
 
-def test_ask_non_agentic_has_sources_but_no_trace(server, corpus, ollama_up):
+def test_ask_non_agentic_has_sources_but_no_trace(server, corpus, ollama_up, notebook):
     resp = requests.post(
         f"{server}/ask",
-        json={"query": "what makes sourdough bread rise", "k": 2, "agentic": False},
+        json={
+            "query": "what makes sourdough bread rise",
+            "k": 2,
+            "agentic": False,
+            "notebook_id": notebook,
+        },
         stream=True,
         timeout=TIMEOUT,
     )
@@ -412,12 +449,17 @@ def test_ask_non_agentic_has_sources_but_no_trace(server, corpus, ollama_up):
         assert "Error communicating with Ollama" not in answer
 
 
-def test_ask_always_emits_sources_event(server, corpus):
+def test_ask_always_emits_sources_event(server, corpus, notebook):
     """The sources event is part of the wire contract for every non-empty
     corpus, whether or not retrieval found anything for this query."""
     resp = requests.post(
         f"{server}/ask",
-        json={"query": "quokka submarine oboe glacier", "agentic": False, "k": 3},
+        json={
+            "query": "quokka submarine oboe glacier",
+            "agentic": False,
+            "k": 3,
+            "notebook_id": notebook,
+        },
         stream=True,
         timeout=TIMEOUT,
     )
@@ -433,54 +475,73 @@ def test_ask_always_emits_sources_event(server, corpus):
 # -------------------------------------------------- document view / delete
 
 
-def test_document_view_highlights_chunk(server, corpus):
+def test_document_view_highlights_chunk(server, corpus, notebook):
     chunk_id = corpus["agent_doc"]["doc_ids"][0]
-    r = requests.get(f"{server}/document/view", params={"id": chunk_id}, timeout=TIMEOUT)
+    r = requests.get(
+        f"{server}/document/view",
+        params={"id": chunk_id, "notebook_id": notebook},
+        timeout=TIMEOUT,
+    )
     assert r.status_code == 200
     assert 'id="target"' in r.text
     assert "agent_doc.txt" in r.text
 
 
-def test_delete_documents_by_source(server):
-    up = upload(server, "to_delete.txt", "Ephemeral document about disposable content.")
+def test_delete_documents_by_source(server, notebook):
+    up = upload(
+        server, "to_delete.txt", "Ephemeral document about disposable content.",
+        notebook=notebook,
+    )
     assert up.status_code == 200
     doc_ids = up.json()["doc_ids"]
 
-    view = requests.get(f"{server}/document/view", params={"id": doc_ids[0]}, timeout=TIMEOUT)
+    view = requests.get(
+        f"{server}/document/view",
+        params={"id": doc_ids[0], "notebook_id": notebook},
+        timeout=TIMEOUT,
+    )
     assert view.status_code == 200
 
     # Resolve the stored source_file path via search metadata.
     hit = requests.post(
         f"{server}/search",
-        json={"query": "ephemeral disposable content", "k": 1},
+        json={"query": "ephemeral disposable content", "k": 1, "notebook_id": notebook},
         timeout=TIMEOUT,
     ).json()
     assert hit
     source_file = hit[0]["source"]["source_file"]
 
     r = requests.delete(
-        f"{server}/documents", params={"source_file": source_file}, timeout=TIMEOUT
+        f"{server}/documents",
+        params={"source_file": source_file, "notebook_id": notebook},
+        timeout=TIMEOUT,
     )
     assert r.status_code == 200
     assert r.json()["db_rows"] == len(doc_ids)
 
-    gone = requests.get(f"{server}/document/view", params={"id": doc_ids[0]}, timeout=TIMEOUT)
+    gone = requests.get(
+        f"{server}/document/view",
+        params={"id": doc_ids[0], "notebook_id": notebook},
+        timeout=TIMEOUT,
+    )
     assert gone.status_code == 404
 
 
 # --------------------------------------------------------------- rebuild
 
 
-def test_rebuild_reindexes_everything(server, corpus):
-    stats_before = requests.get(f"{server}/stats", timeout=TIMEOUT).json()
-    r = requests.post(f"{server}/rebuild", timeout=TIMEOUT)
+def test_rebuild_reindexes_everything(server, corpus, notebook):
+    stats_before = requests.get(
+        f"{server}/stats", params={"notebook_id": notebook}, timeout=TIMEOUT
+    ).json()
+    r = requests.post(f"{server}/rebuild", params={"notebook_id": notebook}, timeout=TIMEOUT)
     assert r.status_code == 200
     assert r.json()["documents_indexed"] == stats_before["total_documents"]
 
     # Search must still work against the rebuilt index.
     hits = requests.post(
         f"{server}/search",
-        json={"query": "largest planet", "k": 3},
+        json={"query": "largest planet", "k": 3, "notebook_id": notebook},
         timeout=TIMEOUT,
     ).json()
     assert any("Jupiter" in h["content"] for h in hits)

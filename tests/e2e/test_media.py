@@ -19,17 +19,23 @@ import requests
 TIMEOUT = (10, 300)
 
 
-def upload(server, filename, content):
+def upload(server, filename, content, *, notebook):
     files = {"file": (filename, content.encode())}
-    return requests.post(f"{server}/upload", files=files, timeout=TIMEOUT)
+    return requests.post(
+        f"{server}/upload", files=files, data={"notebook_id": notebook}, timeout=TIMEOUT
+    )
 
 
-def _poll_podcast(server, job_id, timeout=90):
+def _poll_podcast(server, job_id, notebook, timeout=90):
     """Poll a podcast job until it reaches a terminal status."""
     deadline = time.time() + timeout
     last = None
     while time.time() < deadline:
-        r = requests.get(f"{server}/podcast/status", params={"job_id": job_id}, timeout=TIMEOUT)
+        r = requests.get(
+            f"{server}/podcast/status",
+            params={"job_id": job_id, "notebook_id": notebook},
+            timeout=TIMEOUT,
+        )
         assert r.status_code == 200, r.text
         last = r.json()
         if last["status"] in ("completed", "failed"):
@@ -81,35 +87,46 @@ def test_transcribe_rejects_empty_upload(server):
 # ------------------------------------------------------------- podcast
 
 
-def test_podcast_requires_a_source(server):
-    r = requests.post(f"{server}/podcast", json={"source_files": []}, timeout=TIMEOUT)
+def test_podcast_requires_a_source(server, notebook):
+    r = requests.post(
+        f"{server}/podcast",
+        json={"source_files": [], "notebook_id": notebook},
+        timeout=TIMEOUT,
+    )
     assert r.status_code == 400
 
 
-def test_podcast_status_unknown_job_404(server):
-    r = requests.get(f"{server}/podcast/status", params={"job_id": "nope"}, timeout=TIMEOUT)
+def test_podcast_status_unknown_job_404(server, notebook):
+    r = requests.get(
+        f"{server}/podcast/status",
+        params={"job_id": "nope", "notebook_id": notebook},
+        timeout=TIMEOUT,
+    )
     assert r.status_code == 404
 
 
-def test_podcast_unknown_source_fails_cleanly(server):
+def test_podcast_unknown_source_fails_cleanly(server, notebook):
     """A podcast over sources with no content must reach a failed status with a
     clear error, exercising the background-job + status-polling contract and the
     graph's error short-circuit without needing Ollama or the TTS model."""
     r = requests.post(
         f"{server}/podcast",
-        json={"source_files": ["definitely_not_a_real_source_xyz.txt"]},
+        json={
+            "source_files": ["definitely_not_a_real_source_xyz.txt"],
+            "notebook_id": notebook,
+        },
         timeout=TIMEOUT,
     )
     assert r.status_code == 200, r.text
     job_id = r.json()["job_id"]
 
-    final = _poll_podcast(server, job_id, timeout=60)
+    final = _poll_podcast(server, job_id, notebook, timeout=60)
     assert final["status"] == "failed"
     assert (final.get("error") or final.get("message")), "expected a clear error message"
 
 
-def test_podcasts_listing_is_a_list(server):
-    r = requests.get(f"{server}/podcasts", timeout=TIMEOUT)
+def test_podcasts_listing_is_a_list(server, notebook):
+    r = requests.get(f"{server}/podcasts", params={"notebook_id": notebook}, timeout=TIMEOUT)
     assert r.status_code == 200
     assert isinstance(r.json(), list)
 
@@ -157,7 +174,7 @@ def _read_sse_until_sources(resp, max_events=200):
     return trace_stages, sources
 
 
-def test_research_streams_trace_and_sources(server):
+def test_research_streams_trace_and_sources(server, notebook):
     """A research report streams trace events and a single sources event using
     the same SSE protocol as /ask. We stop at the sources event rather than
     waiting for the full report to be written."""
@@ -168,11 +185,15 @@ def test_research_streams_trace_and_sources(server):
         "docSeek keeps all data on the user's device for privacy. "
         "Retrieval fuses dense vectors with keyword search. "
         "A local cross-encoder reranks candidates for precision.",
+        notebook=notebook,
     )
 
     resp = requests.post(
         f"{server}/research",
-        json={"query": "How does docSeek retrieve and protect information?"},
+        json={
+            "query": "How does docSeek retrieve and protect information?",
+            "notebook_id": notebook,
+        },
         stream=True,
         timeout=TIMEOUT,
     )

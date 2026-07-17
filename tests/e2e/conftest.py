@@ -7,6 +7,8 @@ subprocess gets DOCSEEK_DATA_DIR pointing at a throwaway tmp dir and a free
 port via DOCSEEK_PORT.
 """
 
+import contextlib
+import json
 import os
 import pathlib
 import shutil
@@ -31,10 +33,14 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="session")
-def server():
-    """Boot a real server subprocess; yields its base URL."""
-    data_dir = tempfile.mkdtemp(prefix="docseek_e2e_")
+@contextlib.contextmanager
+def _boot_server(data_dir: str):
+    """Boot a real server subprocess against data_dir.
+
+    Yields (proc, base_url, log_file, log_path). Shared by the `server` and
+    `legacy_server` fixtures so the boot / readiness-probe / teardown logic
+    isn't duplicated.
+    """
     port = _free_port()
     env = {
         **os.environ,
@@ -62,14 +68,16 @@ def server():
                     + log_path.read_text(errors="replace")
                 )
             try:
-                if requests.get(f"{base}/stats", timeout=2).ok:
+                # /notebooks is notebook-agnostic and 200s even with zero
+                # notebooks, unlike /stats which now requires a notebook_id.
+                if requests.get(f"{base}/notebooks", timeout=2).ok:
                     break
             except requests.exceptions.RequestException:
                 pass
             if time.time() > deadline:
                 raise RuntimeError("Server did not become ready in time")
             time.sleep(1)
-        yield base
+        yield proc, base, log_file, log_path
     finally:
         proc.terminate()
         try:
@@ -77,6 +85,51 @@ def server():
         except subprocess.TimeoutExpired:
             proc.kill()
         log_file.close()
+
+
+@pytest.fixture(scope="session")
+def server():
+    """Boot a real server subprocess; yields its base URL."""
+    data_dir = tempfile.mkdtemp(prefix="docseek_e2e_")
+    try:
+        with _boot_server(data_dir) as (proc, base, log_file, log_path):
+            yield base
+    finally:
+        shutil.rmtree(data_dir, ignore_errors=True)
+
+
+@pytest.fixture(scope="session")
+def notebook(server):
+    """Create a fresh notebook for the session's shared test corpus; returns its id."""
+    r = requests.post(f"{server}/notebooks", json={"name": "E2E"}, timeout=10)
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+@pytest.fixture()
+def legacy_server():
+    """Boot a server against a data dir pre-seeded with a legacy (pre-notebooks)
+    flat docs.db, to exercise the one-time migration into a default notebook.
+
+    Does NOT seed my_index.faiss: the server's get_runtime auto-rebuilds the
+    index from docs.db the first time the migrated notebook is touched.
+    """
+    data_dir = tempfile.mkdtemp(prefix="docseek_e2e_legacy_")
+    try:
+        p = str(pathlib.Path(data_dir) / "docs.db")
+        from app.core import database
+
+        database.init_db(p)
+        database.insert_document(
+            p,
+            "Zebra legacy doc about migration.",
+            json.dumps(
+                {"source_file": "legacy.txt", "filename": "legacy.txt", "chunk_index": 0}
+            ),
+        )
+        with _boot_server(data_dir) as (proc, base, log_file, log_path):
+            yield base
+    finally:
         shutil.rmtree(data_dir, ignore_errors=True)
 
 
