@@ -21,3 +21,17 @@ json-repair
 sse-starlette
 langgraph
 faster-whisper
+soundfile
+
+# --- Podcast text-to-speech (Kokoro) ---------------------------------------
+# Kokoro 0.7.16 hard-pins numpy==1.26.4 and its misaki[en] extra pulls
+# spacy-curated-transformers (which forces an unbuildable thinc/blis on newer
+# Pythons). Both would fight the rest of this stack, so Kokoro is installed
+# WITHOUT its declared deps via a helper script (podcasts/read-aloud are
+# optional; skip this if you don't need audio):
+#
+#   ./scripts/install_audio.sh
+#
+# The Kokoro-82M weights and a spaCy English model download once on first use,
+# then run fully offline. `brew install espeak-ng` improves pronunciation of
+# out-of-vocabulary words, but English works without it.

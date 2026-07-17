@@ -100,3 +100,8 @@ CHUNKING_STRATEGY = "auto"
 # "small" balances accuracy and CPU cost; "base"/"tiny" are faster, "medium"
 # more accurate. Auto-downloads once from HuggingFace, then cached.
 STT_MODEL = os.environ.get("DOCSEEK_STT_MODEL", "small")
+
+# Kokoro-82M TTS voices for the two-host podcast (host A / host B).
+# Full voice list ships with the `kokoro` package.
+TTS_VOICE_A = os.environ.get("DOCSEEK_TTS_VOICE_A", "af_heart")
+TTS_VOICE_B = os.environ.get("DOCSEEK_TTS_VOICE_B", "am_michael")

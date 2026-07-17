@@ -743,6 +743,57 @@ async def transcribe_audio(file: UploadFile = File(...)):
     return result
 
 
+class TTSRequest(BaseModel):
+    text: str
+    voice: Optional[str] = None
+
+
+@app.post("/tts")
+async def text_to_speech(request: TTSRequest):
+    """Read a short piece of text aloud (single voice), returned as a WAV.
+
+    Powers the answer read-aloud button; reuses the same local Kokoro model as
+    the podcast pipeline.
+    """
+    import io
+    from app.core import tts as tts_module
+    import soundfile as sf
+
+    text = (request.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No text to speak")
+    # Guard against very long inputs monopolizing the model.
+    text = text[:2000]
+
+    voice = request.voice or tts_module.VOICE_A
+
+    def _render():
+        # Returns (status, bytes): "ok" | "unavailable" | "empty".
+        audio = tts_module.synthesize(text, voice)
+        if audio is None:
+            return "unavailable", b""
+        if audio.size == 0:
+            return "empty", b""
+        buf = io.BytesIO()
+        sf.write(buf, audio, tts_module.SAMPLE_RATE, format="WAV")
+        return "ok", buf.getvalue()
+
+    status, wav_bytes = await run_in_threadpool(_render)
+    if status == "unavailable":
+        raise HTTPException(
+            status_code=503,
+            detail="Local text-to-speech (Kokoro) is unavailable. The model "
+            "downloads once on first use; check server logs.",
+        )
+    if status == "empty":
+        raise HTTPException(
+            status_code=422, detail="Nothing could be synthesized from that text."
+        )
+    from fastapi.responses import Response
+
+    return Response(content=wav_bytes, media_type="audio/wav")
+
+
 # ============================================================================
 # DOCUMENT VIEW
 # ============================================================================

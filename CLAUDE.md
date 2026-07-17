@@ -83,6 +83,8 @@ These build on the same one-time-download-then-offline model story as the embedd
 - **Dictation** (`POST /transcribe`): `app/core/stt.py` is a lazy-loaded faster-whisper singleton (`STT_MODEL`, env `DOCSEEK_STT_MODEL`, default `small`, int8/CPU) mirroring `reranker.py`'s pattern (`is_available()`, thread-safe load-on-first-use).
   The endpoint accepts a MediaRecorder audio `UploadFile` (webm/ogg/wav; faster-whisper decodes any container via bundled PyAV), runs transcription in `run_in_threadpool`, and returns `{"text", "language", "duration"}`; it reuses the `MAX_UPLOAD_BYTES` guard and returns 503 when the model can't load.
   Frontend: a push-to-talk `MicButton` in `ChatPanel`'s ask bar records via MediaRecorder, POSTs the blob through `api.js` `transcribe(blob)`, and appends the text into the query input; mic-permission denial and backend-unavailable both surface as an inline caution line.
+- **Text-to-speech** (`app/core/tts.py`): a lazy-loaded Kokoro-82M pipeline (24 kHz mono, config `TTS_VOICE_A`/`TTS_VOICE_B`), exposing `synthesize(text, voice) -> np.ndarray`, `is_available()`, and `SAMPLE_RATE`.
+  Kokoro is installed without its declared deps (its numpy pin and misaki's `spacy-curated-transformers` fight the rest of the stack); see the requirements file. `POST /tts` (text → WAV) powers the answer read-aloud button (`SpeakButton` in `ChatPanel`).
 
 ### Persistence and lifecycle
 

@@ -1,10 +1,72 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square } from 'lucide-react';
+import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { search, ask, transcribe, getDocumentViewUrl } from '../lib/api';
+import { search, ask, transcribe, synthesizeSpeech, getDocumentViewUrl } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
 import { Segmented, Chip } from './ui';
+
+/* ── Read-aloud button for an answer (local Kokoro TTS via /tts) ────── */
+function SpeakButton({ text }) {
+  const [state, setState] = useState('idle'); // idle | loading | playing
+  const audioRef = useRef(null);
+  const urlRef = useRef(null);
+
+  const cleanup = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current);
+      urlRef.current = null;
+    }
+  };
+
+  useEffect(() => cleanup, []);
+
+  const toggle = async () => {
+    if (state === 'playing' || state === 'loading') {
+      cleanup();
+      setState('idle');
+      return;
+    }
+    setState('loading');
+    try {
+      // Strip markdown/citation noise so the model reads clean prose.
+      const clean = text.replace(/\[\d{1,2}\]/g, '').replace(/[#*_`>]/g, '');
+      const url = await synthesizeSpeech(clean);
+      urlRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => {
+        cleanup();
+        setState('idle');
+      };
+      audio.onerror = () => {
+        cleanup();
+        setState('idle');
+      };
+      await audio.play();
+      setState('playing');
+    } catch {
+      cleanup();
+      setState('idle');
+    }
+  };
+
+  const Icon = state === 'loading' ? Loader2 : state === 'playing' ? VolumeX : Volume2;
+  return (
+    <Chip
+      icon={Icon}
+      onClick={toggle}
+      title={state === 'playing' ? 'Stop' : 'Read this answer aloud'}
+      className={state === 'loading' ? '[&_svg]:animate-spin' : ''}
+    >
+      {state === 'playing' ? 'Stop' : 'Listen'}
+    </Chip>
+  );
+}
 
 /* ── Push-to-talk dictation button (local Whisper via /transcribe) ──── */
 function MicButton({ disabled, onText, onError }) {
@@ -412,13 +474,16 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
                       <div className="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-border">
                         <SourcesRow sources={msg.sources} />
                         {!msg.isStreaming && msg.text && (
-                          <Chip
-                            icon={StickyNote}
-                            onClick={() => onSaveNote({ title: msg.query, body: msg.text })}
-                            title="Save this answer to Studio notes"
-                          >
-                            Save to note
-                          </Chip>
+                          <>
+                            <Chip
+                              icon={StickyNote}
+                              onClick={() => onSaveNote({ title: msg.query, body: msg.text })}
+                              title="Save this answer to Studio notes"
+                            >
+                              Save to note
+                            </Chip>
+                            <SpeakButton text={msg.text} />
+                          </>
                         )}
                         {msg.latency != null && (
                           <span className="ml-auto font-mono text-2xs text-text-muted">

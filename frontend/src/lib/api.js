@@ -126,6 +126,24 @@ export async function transcribe(blob) {
   return { data, latency };
 }
 
+/**
+ * Read a short piece of text aloud (single local voice).
+ * Returns an object URL for the WAV; the caller must revoke it when done.
+ */
+export async function synthesizeSpeech(text, voice = null) {
+  const res = await fetch(`${BASE}/tts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Read-aloud failed: HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
 /* ── Search / Query ──────────────────────────────────── */
 
 export async function search(query, k = 5, rerank = false, sourceFiles = null) {
