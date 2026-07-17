@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, File, Form, UploadFile, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -22,6 +22,7 @@ from app.core.config import (
     DB_PATH,
     INDEX_PATH,
     UPLOAD_DIR,
+    AUDIO_DIR,
     MAX_UPLOAD_BYTES,
     CORS_ORIGINS,
     ADMIN_TOKEN,
@@ -32,7 +33,7 @@ from app.core.config import (
     RERANK_CANDIDATE_FACTOR,
     CHUNKING_STRATEGY,
 )
-from app.core import database, parsing, chunking, reranker, stt
+from app.core import database, parsing, chunking, reranker, stt, podcast
 from app.core.engine import VectorEngine
 from app.core.llm import OllamaLLM
 from app.core.fusion import reciprocal_rank_fusion
@@ -741,6 +742,108 @@ async def transcribe_audio(file: UploadFile = File(...)):
         f"({result.get('language')}, {result.get('duration')}s)"
     )
     return result
+
+
+# ============================================================================
+# PODCAST (LOCAL AUDIO OVERVIEW)
+# ============================================================================
+
+# In-memory job registry for podcast generation. Podcasts take minutes, so we
+# reuse the background-worker + status-polling pattern proven by GitHub ingest.
+podcast_jobs: Dict[str, Dict[str, Any]] = {}
+
+
+class PodcastRequest(BaseModel):
+    source_files: List[str]
+
+
+def _podcast_worker(job_id: str, source_files: List[str]):
+    """Background worker: drive the podcast LangGraph in its own event loop."""
+    import asyncio
+
+    def on_progress(ev: Dict[str, Any]):
+        job = podcast_jobs.get(job_id)
+        if job is not None:
+            job.update({
+                "stage": ev.get("stage", job.get("stage")),
+                "message": ev.get("message", job.get("message")),
+                "progress": ev.get("progress", job.get("progress", 0)),
+            })
+
+    try:
+        result = asyncio.run(podcast.generate_podcast(job_id, source_files, on_progress))
+    except Exception as e:  # asyncio/loop-level failure
+        logger.error(f"Podcast worker {job_id} failed: {e}")
+        result = {"status": "failed", "error": str(e)}
+
+    job = podcast_jobs.setdefault(job_id, {})
+    job.update(result)
+    if result.get("status") == "failed":
+        job["message"] = result.get("error", "Generation failed.")
+        job["progress"] = job.get("progress", 0)
+    else:
+        job["message"] = "Episode ready."
+        job["progress"] = 100
+
+
+@app.post("/podcast")
+def create_podcast(request: PodcastRequest):
+    """Kick off a two-host audio overview for the selected sources. Returns a
+    job_id to poll via /podcast/status."""
+    import uuid
+
+    sources = [s for s in (request.source_files or []) if s and s.strip()]
+    if not sources:
+        raise HTTPException(status_code=400, detail="Select at least one source.")
+
+    job_id = uuid.uuid4().hex[:12]
+    podcast_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "running",
+        "stage": "queued",
+        "message": "Starting…",
+        "progress": 0,
+        "source_files": sources,
+        "error": None,
+    }
+    thread = threading.Thread(
+        target=_podcast_worker, args=(job_id, sources), daemon=True
+    )
+    thread.start()
+    logger.info(f"Podcast job {job_id} started for {len(sources)} source(s)")
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.get("/podcast/status")
+def podcast_status(job_id: str = Query(...)):
+    job = podcast_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown podcast job")
+    return {
+        "job_id": job_id,
+        "status": job.get("status"),
+        "stage": job.get("stage"),
+        "message": job.get("message"),
+        "progress": job.get("progress", 0),
+        "error": job.get("error"),
+        "title": job.get("title"),
+        "duration": job.get("duration"),
+    }
+
+
+@app.get("/podcast/audio")
+def podcast_audio(job_id: str = Query(...)):
+    """Serve the generated WAV for a completed episode."""
+    wav = AUDIO_DIR / f"{job_id}.wav"
+    if not wav.exists():
+        raise HTTPException(status_code=404, detail="Audio not found for this job")
+    return FileResponse(str(wav), media_type="audio/wav", filename=f"{job_id}.wav")
+
+
+@app.get("/podcasts")
+def list_podcasts():
+    """All generated episodes, newest first."""
+    return podcast.list_episodes()
 
 
 class TTSRequest(BaseModel):

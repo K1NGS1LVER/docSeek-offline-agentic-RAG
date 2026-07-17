@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Plus, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Loader2, Mic, Download, AlertCircle, X } from 'lucide-react';
 import { useSystem } from '../lib/SystemContext';
+import { getPodcastAudioUrl } from '../lib/api';
 import { Button, SectionLabel, Segmented, inputCls, textareaCls } from './ui';
 
 function NoteCard({ note, onDelete }) {
@@ -87,6 +88,134 @@ function NotesTab({ notes, onAdd, onDelete }) {
       {notes.map((n) => (
         <NoteCard key={n.id} note={n} onDelete={onDelete} />
       ))}
+    </div>
+  );
+}
+
+/* ── Audio overview (local two-host podcast) ────────── */
+
+function fmtDuration(seconds) {
+  if (!seconds || seconds < 1) return '—';
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function EpisodeCard({ ep }) {
+  return (
+    <div className="bg-panel border border-border rounded-xl p-4">
+      <h4 className="font-serif text-base font-medium text-text break-words">
+        {ep.title || 'Audio overview'}
+      </h4>
+      <div className="font-mono text-2xs text-text-muted mt-1">
+        {fmtDuration(ep.duration)} · {ep.turns} turns
+        {ep.source_files?.length ? ` · ${ep.source_files.length} source${ep.source_files.length !== 1 ? 's' : ''}` : ''}
+      </div>
+      <audio
+        controls
+        preload="none"
+        src={getPodcastAudioUrl(ep.job_id)}
+        className="w-full mt-3 h-9"
+      />
+      <a
+        href={getPodcastAudioUrl(ep.job_id)}
+        download={`${(ep.title || 'audio-overview').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.wav`}
+        className="inline-flex items-center gap-1.5 mt-2 font-mono text-2xs text-text-muted hover:text-accent transition-colors"
+      >
+        <Download className="w-3 h-3" />
+        download wav
+      </a>
+    </div>
+  );
+}
+
+function AudioTab({ selectedSources }) {
+  // Job state lives in SystemContext so it survives Studio tab switches and
+  // page reloads; this component is just the view.
+  const { podcastJob, podcasts, startPodcast, dismissPodcastJob, addLog } = useSystem();
+  const [startError, setStartError] = useState('');
+
+  const generating = podcastJob?.status === 'running';
+  const failed = podcastJob?.status === 'failed';
+  const error = startError || (failed ? (podcastJob.error || podcastJob.message) : '');
+
+  const generate = async () => {
+    setStartError('');
+    if (selectedSources.length === 0) {
+      setStartError('Select at least one source first.');
+      return;
+    }
+    try {
+      addLog(`Generating podcast from ${selectedSources.length} source(s)…`);
+      await startPodcast(selectedSources);
+    } catch (e) {
+      setStartError(e.message || 'Could not start generation.');
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="bg-panel border border-border rounded-xl p-4">
+        <SectionLabel className="mb-1">Audio overview</SectionLabel>
+        <p className="text-sm text-text-dim leading-relaxed mb-3">
+          Turn your selected sources into a two-host podcast — generated and voiced entirely on-device.
+        </p>
+        <Button
+          icon={Mic}
+          busy={generating}
+          onClick={generate}
+          disabled={generating || selectedSources.length === 0}
+          className="w-full"
+        >
+          {generating ? 'Generating…' : 'Generate podcast'}
+        </Button>
+        <p className="font-mono text-2xs text-text-muted mt-2 text-center">
+          {generating
+            ? 'runs in the background — you can switch tabs'
+            : selectedSources.length === 0
+            ? 'select at least one source'
+            : `from ${selectedSources.length} selected source${selectedSources.length !== 1 ? 's' : ''} · takes a few minutes`}
+        </p>
+      </div>
+
+      {generating && (
+        <div className="bg-panel border border-accent/30 rounded-xl p-4 space-y-2">
+          <div className="flex items-center justify-between font-mono text-2xs text-accent">
+            <span className="flex items-center gap-2">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              {podcastJob.stage || 'working'}
+            </span>
+            <span className="text-text-muted">{podcastJob.progress ?? 0}%</span>
+          </div>
+          <div className="h-1 bg-surface rounded-full overflow-hidden">
+            <div
+              className="h-full bg-accent transition-all"
+              style={{ width: `${podcastJob.progress ?? 0}%` }}
+            />
+          </div>
+          {podcastJob.message && <p className="text-xs text-text-dim">{podcastJob.message}</p>}
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-start gap-2 bg-caution-soft border border-caution/25 rounded-xl px-4 py-3 text-sm text-caution">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span className="flex-1">{error}</span>
+          {failed && (
+            <button onClick={dismissPodcastJob} title="Dismiss" className="flex-shrink-0 hover:text-text">
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {podcasts.length === 0 && !generating ? (
+        <p className="text-sm text-text-muted text-center px-4 py-6">
+          No episodes yet — generate one from your sources above.
+        </p>
+      ) : (
+        podcasts.map((ep) => <EpisodeCard key={ep.job_id} ep={ep} />)
+      )}
     </div>
   );
 }
@@ -223,7 +352,7 @@ function EngineTab() {
   );
 }
 
-export default function StudioPanel({ notes, onAddNote, onDeleteNote }) {
+export default function StudioPanel({ notes, onAddNote, onDeleteNote, selectedSources = [] }) {
   const [tab, setTab] = useState('notes');
 
   return (
@@ -235,16 +364,15 @@ export default function StudioPanel({ notes, onAddNote, onDeleteNote }) {
           onChange={setTab}
           options={[
             { value: 'notes', label: 'Notes' },
+            { value: 'audio', label: 'Audio' },
             { value: 'engine', label: 'Engine' },
           ]}
         />
       </div>
       <div className="flex-1 overflow-y-auto px-4 pb-4 pt-2">
-        {tab === 'notes' ? (
-          <NotesTab notes={notes} onAdd={onAddNote} onDelete={onDeleteNote} />
-        ) : (
-          <EngineTab />
-        )}
+        {tab === 'notes' && <NotesTab notes={notes} onAdd={onAddNote} onDelete={onDeleteNote} />}
+        {tab === 'audio' && <AudioTab selectedSources={selectedSources} />}
+        {tab === 'engine' && <EngineTab />}
       </div>
     </aside>
   );

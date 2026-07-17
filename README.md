@@ -8,7 +8,7 @@ Nothing leaves your machine (model weights are downloaded once from HuggingFace,
 
 *   **Agentic retrieval loop (LangGraph):** a local LLM agent, orchestrated as a LangGraph `StateGraph`, plans each query (dynamic top-k, query rewriting, sub-query decomposition), decides whether to rerank, grades the retrieved evidence, and re-loops with a reformulated query when the evidence is weak (CRAG-style). LangGraph is pure orchestration (no network calls), so the local-first guarantee is unchanged.
 *   **Local dictation:** a mic button in the ask bar records your question and transcribes it on-device with faster-whisper (`POST /transcribe`) — no audio ever leaves your machine.
-*   **Read-aloud:** any answer can be read aloud on-device with Kokoro TTS (`POST /tts`).
+*   **Audio overviews (podcast):** turn selected sources into a two-host podcast, scripted by the local LLM and voiced on-device with Kokoro TTS (a second LangGraph graph, `POST /podcast`). Answers also get a read-aloud button (`POST /tts`).
 *   **Hybrid search:** dense vectors (FAISS, `all-mpnet-base-v2`) fused with BM25 keyword search (SQLite FTS5) via Reciprocal Rank Fusion.
 *   **Local cross-encoder reranking:** `ms-marco-MiniLM-L-6-v2` rescores candidates on-device when the agent judges precision matters.
 *   **Broad file support:** ingest `.txt`, `.md`, `.html`, `.docx`, `.pdf`, and `.pptx`. Scanned/image-only PDFs are read via an on-device Tesseract OCR fallback.
@@ -148,6 +148,20 @@ curl -X POST "http://localhost:8000/transcribe" -F "file=@clip.webm"
 
 The model (`DOCSEEK_STT_MODEL`, default `small`) downloads once from HuggingFace, then runs fully offline. No audio ever leaves your machine.
 
+### 7. Audio overview (local podcast)
+
+In the Studio panel's **Audio** tab, pick your sources and click **Generate podcast**. The local LLM writes a two-host script from your sources and Kokoro TTS voices it on-device, producing a downloadable WAV. Generation takes a few minutes and streams live progress.
+
+```bash
+# start a job (returns a job_id), then poll status
+curl -X POST "http://localhost:8000/podcast" -H "Content-Type: application/json" \
+     -d '{"source_files": ["my_doc.md"]}'
+curl "http://localhost:8000/podcast/status?job_id=<id>"
+curl "http://localhost:8000/podcast/audio?job_id=<id>" --output overview.wav
+```
+
+Podcast generation needs both Ollama (for the script) and the Kokoro TTS model. Kokoro needs a one-time install via `./scripts/install_audio.sh` (it can't go in `requirements.txt` cleanly — see that script's header for why). That script also installs `espeak-ng`, the phoneme fallback for out-of-vocabulary words (drug names, acronyms, numbers) — strongly recommended, since without it those passages are skipped in the audio.
+
 ## ⚙️ Configuration
 You can adjust settings in `app/core/config.py`:
 *   **MODEL_NAME:** Change embedding model (e.g., `all-MiniLM-L6-v2` for speed).
@@ -159,6 +173,7 @@ You can adjust settings in `app/core/config.py`:
 *   **CHUNKING_STRATEGY:** Default ingestion chunking strategy (`auto`, `recursive`, or `semantic`).
 *   **LLM_MODEL / LLM_BASE_URL:** Local Ollama model used for planning, grading, and answers.
 *   **STT_MODEL:** faster-whisper model size for dictation (env `DOCSEEK_STT_MODEL`; default `small`).
+*   **TTS_VOICE_A / TTS_VOICE_B:** Kokoro voices for the two podcast hosts (env `DOCSEEK_TTS_VOICE_A`/`_B`).
 
 ## ✅ Testing
 

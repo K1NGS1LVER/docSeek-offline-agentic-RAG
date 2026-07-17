@@ -105,3 +105,7 @@ STT_MODEL = os.environ.get("DOCSEEK_STT_MODEL", "small")
 # Full voice list ships with the `kokoro` package.
 TTS_VOICE_A = os.environ.get("DOCSEEK_TTS_VOICE_A", "af_heart")
 TTS_VOICE_B = os.environ.get("DOCSEEK_TTS_VOICE_B", "am_michael")
+
+# Generated podcast WAVs + their JSON metadata sidecars live here.
+AUDIO_DIR = DATA_DIR / "audio"
+AUDIO_DIR.mkdir(parents=True, exist_ok=True)

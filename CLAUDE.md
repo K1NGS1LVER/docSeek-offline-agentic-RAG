@@ -85,6 +85,11 @@ These build on the same one-time-download-then-offline model story as the embedd
   Frontend: a push-to-talk `MicButton` in `ChatPanel`'s ask bar records via MediaRecorder, POSTs the blob through `api.js` `transcribe(blob)`, and appends the text into the query input; mic-permission denial and backend-unavailable both surface as an inline caution line.
 - **Text-to-speech** (`app/core/tts.py`): a lazy-loaded Kokoro-82M pipeline (24 kHz mono, config `TTS_VOICE_A`/`TTS_VOICE_B`), exposing `synthesize(text, voice) -> np.ndarray`, `is_available()`, and `SAMPLE_RATE`.
   Kokoro is installed without its declared deps (its numpy pin and misaki's `spacy-curated-transformers` fight the rest of the stack); see the requirements file. `POST /tts` (text → WAV) powers the answer read-aloud button (`SpeakButton` in `ChatPanel`).
+- **Podcast / audio overview** (`app/core/podcast.py`): the second LangGraph graph (`gather → outline → script → synthesize`, error-short-circuit edges), the first real payoff of the Phase 1 port.
+  `gather` assembles the selected sources' chunks from SQLite, `outline`/`script` are local-LLM JSON calls (episode title, talking points, then per-point two-host A/B dialogue), `synthesize` renders each turn with Kokoro (host A/B voices) into `data/audio/<job_id>.wav` plus a JSON metadata sidecar.
+  Unlike the retrieval agent it has no heuristic fallback (a coherent script genuinely needs the LLM); if Ollama or the TTS model is unavailable the job fails with a clear error.
+  Podcasts take minutes, so they run via the background-worker + status-polling pattern (like GitHub ingest): `POST /podcast` (`source_files` → `job_id`, runs the graph in a worker thread's own event loop), `GET /podcast/status`, `GET /podcast/audio` (WAV via `FileResponse`), `GET /podcasts` (episode list from the sidecars).
+  Frontend: an "Audio" tab in `StudioPanel` generates from the currently selected sources, shows live progress, and lists episodes with an HTML5 player + WAV download.
 
 ### Persistence and lifecycle
 

@@ -89,7 +89,12 @@ function WorkspaceInner({ theme, setTheme }) {
           onSaveNote={addNote}
         />
         {studioOpen && (
-          <StudioPanel notes={notes} onAddNote={addNote} onDeleteNote={deleteNote} />
+          <StudioPanel
+            notes={notes}
+            onAddNote={addNote}
+            onDeleteNote={deleteNote}
+            selectedSources={selected.map((s) => s.source_file)}
+          />
         )}
       </div>
 

@@ -126,6 +126,31 @@ export async function transcribe(blob) {
   return { data, latency };
 }
 
+/* ── Podcast (local audio overview) ──────────────────── */
+
+/** Start generating a two-host audio overview for the given sources. */
+export async function createPodcast(sourceFiles) {
+  return request('/podcast', {
+    method: 'POST',
+    body: JSON.stringify({ source_files: sourceFiles }),
+  });
+}
+
+/** Poll the status of a podcast generation job. */
+export async function getPodcastStatus(jobId) {
+  return request(`/podcast/status?job_id=${encodeURIComponent(jobId)}`);
+}
+
+/** List all generated episodes, newest first. */
+export async function getPodcasts() {
+  return request('/podcasts');
+}
+
+/** URL for the generated WAV of a completed episode. */
+export function getPodcastAudioUrl(jobId) {
+  return `${BASE}/podcast/audio?job_id=${encodeURIComponent(jobId)}`;
+}
+
 /**
  * Read a short piece of text aloud (single local voice).
  * Returns an object URL for the WAV; the caller must revoke it when done.
