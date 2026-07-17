@@ -1,0 +1,148 @@
+/* ============================================================================
+   docSeek DESIGN TOKENS — the single source of truth for all styling.
+
+   Every color, font, size, radius, spacing value, and state color in the app
+   resolves to a variable defined in this file. tailwind.css maps these onto
+   Tailwind utilities; index.css consumes them for base styles and the landing
+   page classes. Components never hard-code visual values.
+
+   THE DESIGN LANGUAGE
+   ── Spacing ──────────────────────────────────────────────────────────────
+   8pt grid. The base unit is 4px (half-step); all layout spacing uses
+   multiples of 8 (8/16/24/32/40/48), with 4px allowed only inside tight
+   component internals (icon gaps, chip padding).
+
+   ── Shapes ───────────────────────────────────────────────────────────────
+   cards / panels / modals   → 12px  (rounded-xl)
+   buttons / inputs          → 8px   (rounded-lg)
+   chips / toggles / badges  → pill  (rounded-full)
+   Controls have FIXED heights: sm 32px · md 40px · lg 48px. No ad-hoc
+   padding-derived heights.
+
+   ── Color & contrast ─────────────────────────────────────────────────────
+   All text/background pairs meet WCAG AA (≥ 4.5:1 for normal text, ≥ 3:1
+   for large text and UI borders). Solid accent/danger fills pair with
+   --on-accent, never raw white/black. Disabled state uses the dedicated
+   --disabled-* tokens (exempt from AA), not opacity hacks.
+
+   ── States ───────────────────────────────────────────────────────────────
+   enabled  → component variant tokens (accent / surface / border)
+   hover    → --accent-hover for solid fills, --surface-2 for quiet controls
+   focus    → 2px outline in --accent, offset 2px (keyboard: :focus-visible)
+   disabled → --disabled-bg + --disabled-fg, pointer-events none
+
+   ── Type ─────────────────────────────────────────────────────────────────
+   Sans (DM Sans) for UI, Serif (Lora) for titles and reading text, Mono
+   (JetBrains Mono) for data/labels. Fixed px scale — see --fs-* below.
+   ========================================================================= */
+
+:root {
+  /* ── Color: warm dark (default) ─────────────────────────────
+     Contrast on --bg #111110 (all AA-checked):
+     text-1 16.6:1 · text-2 10.2:1 · text-3 5.4:1 · accent 5.9:1
+     green 5.5:1 · red 5.1:1 · info 5.9:1 · on-accent vs accent 5.7:1 */
+  --bg: #111110;
+  --bg-2: #191816;
+  --surface: #1c1b19;
+  --surface-2: #262420;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-2: rgba(255, 255, 255, 0.14);
+
+  --text-1: #f5f3ef;
+  --text-2: #c6c2ba;
+  --text-3: #918d85;
+
+  --accent: #d97706;
+  --accent-hover: #e88d1a;
+  --on-accent: #16130e;
+  --accent-soft: rgba(217, 119, 6, 0.10);
+  --accent-2: rgba(217, 119, 6, 0.22);
+
+  --green: #16a34a;
+  --green-soft: rgba(22, 163, 74, 0.12);
+  --red: #ef4444;
+  --red-soft: rgba(239, 68, 68, 0.10);
+  --info: #4e8ef7;
+
+  --disabled-bg: rgba(255, 255, 255, 0.06);
+  --disabled-fg: rgba(255, 255, 255, 0.35);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 32px rgba(0, 0, 0, 0.35);
+
+  /* ── Spacing: 8pt grid, 4px base unit ─────────────────────── */
+  --space-unit: 4px;
+
+  /* ── Radii ─────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+
+  /* ── Type scale (px, fixed) ────────────────────────────────── */
+  --fs-2xs: 10px;   /* mono micro-labels, eyebrows */
+  --fs-xs: 11px;    /* mono labels, captions */
+  --fs-sm: 13px;    /* secondary body, buttons */
+  --fs-base: 14px;  /* body */
+  --fs-lg: 16px;    /* emphasized body, panel titles */
+  --fs-xl: 20px;    /* section titles */
+  --fs-2xl: 24px;   /* page titles */
+  --fs-3xl: 28px;   /* hero titles (app) */
+  --fs-4xl: 32px;   /* stat numerals */
+
+  --font-sans: 'DM Sans', system-ui, sans-serif;
+  --font-serif: 'Lora', Georgia, serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+
+  /* ── Controls: fixed heights ───────────────────────────────── */
+  --control-sm: 32px;
+  --control-md: 40px;
+  --control-lg: 48px;
+
+  /* ── Layout ────────────────────────────────────────────────── */
+  --header-h: 56px;
+  --sources-w: 288px;
+  --studio-w: 320px;
+  --chat-max: 768px;
+  --nav-height: 56px;   /* landing navbar */
+
+  /* ── Motion ────────────────────────────────────────────────── */
+  --transition: 150ms ease;
+  --transition-md: 250ms ease;
+}
+
+[data-theme="light"] {
+  /* ── Color: cream light ─────────────────────────────────────
+     Contrast on --bg #f5eedc (all AA-checked):
+     text-1 14.9:1 · text-2 6.5:1 · text-3 4.8:1 · accent 5.2:1
+     green 6.2:1 · red 5.6:1 · info 5.9:1 · on-accent vs accent 6.0:1 */
+  --bg: #f5eedc;
+  --bg-2: #ece2ca;
+  --surface: #fbf7ee;
+  --surface-2: #efe7d2;
+  --border: rgba(28, 25, 20, 0.10);
+  --border-2: rgba(28, 25, 20, 0.16);
+
+  --text-1: #1c1914;
+  --text-2: #5d5347;
+  --text-3: #756756;
+
+  --accent: #a3480a;
+  --accent-hover: #8a3c08;
+  --on-accent: #ffffff;
+  --accent-soft: rgba(163, 72, 10, 0.09);
+  --accent-2: rgba(163, 72, 10, 0.18);
+
+  --green: #166534;
+  --green-soft: rgba(22, 101, 52, 0.10);
+  --red: #b91c1c;
+  --red-soft: rgba(185, 28, 28, 0.08);
+  --info: #1d4ed8;
+
+  --disabled-bg: rgba(28, 25, 20, 0.06);
+  --disabled-fg: rgba(28, 25, 20, 0.35);
+
+  --shadow-1: 0 1px 2px rgba(28, 25, 20, 0.08);
+  --shadow-2: 0 8px 32px rgba(28, 25, 20, 0.12);
+}

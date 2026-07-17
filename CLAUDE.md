@@ -84,7 +84,21 @@ npm run preview   # preview production build
 ### Frontend
 
 - React + Vite + Tailwind v4, in `frontend/`.
-- `src/lib/api.js` is the HTTP client, including a typed-SSE parser for `/ask` (dispatches `trace` and `sources` events to callbacks, accumulates unnamed events as the answer text).
-- `src/lib/SystemContext.jsx` holds shared app/system state.
-- `src/pages/Query.jsx` is the main search/ask UI (toggles between plain semantic Search and Ask AI streaming modes, renders the live agent-activity trace and source chips, and offers K=AUTO to let the agent pick k).
-- Routing/pages under `src/pages/`, shared chrome under `src/components/` (Navbar, Sidebar, StatusBar, ThemeToggle, LoadingScreen).
+- Design system: `src/theme.css` is the single source of truth for ALL styling values - colors (WCAG AA-checked pairs for both themes, documented in the file), the 8pt spacing grid (4px base unit), radii, the fixed px type scale (`--fs-*`), fixed control heights (sm 32 / md 40 / lg 48), and state tokens (`--accent-hover`, `--on-accent`, `--disabled-bg`/`--disabled-fg`).
+  Cream light theme is the default; warm dark via the `data-theme` attribute.
+  `src/tailwind.css` maps those tokens onto Tailwind utilities via `@theme inline` (spacing utilities compile to `calc(var(--space-unit) * n)`), and `src/index.css` holds the reset/base layer plus landing-page classes.
+  Cascade layering matters: index.css declares `@layer base, theme, utilities` and wraps its reset in `@layer base` so Tailwind utilities always win over the reset; component classes stay unlayered.
+  Tailwind preflight is intentionally not imported; the reset in index.css strips UA button/input chrome itself.
+  Never hard-code colors, fonts, sizes, or radii in components; never use spacing off the 8pt grid.
+- `src/components/ui.jsx` holds the shared UI primitives (SectionLabel, Card, Button, IconButton, Segmented, Chip, Checkbox, Modal, OpRow, inputCls, textareaCls).
+  All component shapes come from these primitives, never ad-hoc per page: cards/modals rounded-xl/2xl, buttons/inputs rounded-lg with fixed heights, chips/toggles pills, disabled state via the disabled tokens (never opacity).
+- `src/lib/api.js` is the HTTP client, including a typed-SSE parser for `/ask` (dispatches `trace` and `sources` events to callbacks, accumulates unnamed events as the answer text; typed events never leak into answer text).
+- `src/lib/SystemContext.jsx` holds shared app/system state (stats, sources, health, session logs), polled from the backend.
+- Routes: `/` is the landing page (`src/pages/LandingPage.jsx`: split hero with an interactive vector-constellation canvas and a looping, clickable agentic-ask terminal demo).
+  `/app` is a single NotebookLM-style three-panel workspace (`src/pages/Workspace.jsx`): Sources panel | Chat | Studio panel, plus an add-sources modal and a settings modal.
+- Workspace UX (`src/components/`): `SourcesPanel` lists sources with per-source checkboxes that scope retrieval (unchecked sources are excluded via the `source_files` request field), click-to-view (document view in a new tab), and two-click delete.
+  `ChatPanel` is the ask/search thread: suggested-question chips, streaming serif answers (`.answer-prose`), agent trace, inline `[n]` citation chips (bare `[n]` markers in the markdown are rewritten to links and rendered as `.citation-chip`), numbered source chips, and save-answer-to-note.
+  `StudioPanel` has Notes (localStorage `ds_notes`) and Engine (stats tiles, pipeline facts, latency history, session log) tabs.
+  `AddSourcesModal` handles upload queue + chunking-strategy picker + paste + GitHub ingest; it auto-opens once when the library is empty.
+  `SettingsModal` holds theme, rebuild, collapsible debug console, and reset.
+- `frontend/design/workspace-mockup.html` is the standalone design-language mockup (app frame + styleguide) used to review this redesign; keep it in sync only if the design language itself changes.

@@ -36,15 +36,28 @@ export async function getDocuments() {
   return request('/documents');
 }
 
+/** Rich per-source listing: filename, chunk count, first_chunk_id, chunking. */
+export async function getSources() {
+  return request('/sources');
+}
+
+/** Delete every chunk belonging to a source file. */
+export async function deleteSource(sourceFile) {
+  return request(`/documents?source_file=${encodeURIComponent(sourceFile)}`, {
+    method: 'DELETE',
+  });
+}
+
 export async function getIngestStatus() {
   return request('/ingest/status');
 }
 
 /* ── Document Ingestion ──────────────────────────────── */
 
-export async function uploadFile(file) {
+export async function uploadFile(file, chunkingStrategy = null) {
   const form = new FormData();
   form.append('file', file);
+  if (chunkingStrategy) form.append('chunking_strategy', chunkingStrategy);
 
   const url = `${BASE}/upload`;
   const start = performance.now();
@@ -88,10 +101,10 @@ export async function ingestGithub(repoUrl, subpath = null) {
 
 /* ── Search / Query ──────────────────────────────────── */
 
-export async function search(query, k = 5, rerank = false) {
+export async function search(query, k = 5, rerank = false, sourceFiles = null) {
   return request('/search', {
     method: 'POST',
-    body: JSON.stringify({ query, k, rerank }),
+    body: JSON.stringify({ query, k, rerank, source_files: sourceFiles }),
   });
 }
 
@@ -106,18 +119,18 @@ export async function search(query, k = 5, rerank = false) {
  * @param {string} query - The user's question
  * @param {number|null} k - Number of chunks to retrieve (null = agent decides)
  * @param {function} onChunk - Called with the accumulated answer text
- * @param {object} [handlers] - Optional { onTrace(event), onSources(list), agentic }
+ * @param {object} [handlers] - Optional { onTrace(event), onSources(list), agentic, sourceFiles }
  * @returns {Promise<{data: string, latency: number}>}
  */
 export async function ask(query, k = null, onChunk, handlers = {}) {
-  const { onTrace, onSources, agentic = null } = handlers;
+  const { onTrace, onSources, agentic = null, sourceFiles = null } = handlers;
   const url = `${BASE}/ask`;
   const start = performance.now();
 
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, k, agentic }),
+    body: JSON.stringify({ query, k, agentic, source_files: sourceFiles }),
   });
 
   if (!res.ok) {
@@ -153,8 +166,10 @@ export async function ask(query, k = null, onChunk, handlers = {}) {
       if (onTrace && typeof parsed === 'object') onTrace(parsed);
     } else if (name === 'sources') {
       if (onSources && Array.isArray(parsed)) onSources(parsed);
-    } else {
-      accumulated += typeof parsed === 'string' ? parsed : rawData;
+    } else if (typeof parsed === 'string') {
+      // Unnamed events carry JSON-encoded answer text deltas; anything else
+      // is a typed payload that must never leak into the answer text.
+      accumulated += parsed;
       if (onChunk) onChunk(accumulated);
     }
   };

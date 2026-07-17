@@ -1,5 +1,5 @@
 import { useState, useEffect, createContext, useContext, useCallback } from 'react';
-import { getStats, getIngestStatus, getDocuments } from '../lib/api';
+import { getStats, getIngestStatus, getSources } from '../lib/api';
 
 const SystemContext = createContext(null);
 
@@ -13,7 +13,8 @@ export function useSystem() {
 export function SystemProvider({ children }) {
   const [stats, setStats] = useState(null);
   const [ingestStatus, setIngestStatus] = useState(null);
-  const [documents, setDocuments] = useState([]);
+  // Rich per-source rows: {source_file, filename, chunks, first_chunk_id, …}
+  const [sources, setSources] = useState([]);
   const [health, setHealth] = useState('CONNECTING');
   const [lastLatency, setLastLatency] = useState(null);
   const [error, setError] = useState(null);
@@ -38,12 +39,12 @@ export function SystemProvider({ children }) {
     }
   }, [addLog]);
 
-  const refreshDocuments = useCallback(async () => {
+  const refreshSources = useCallback(async () => {
     try {
-      const { data } = await getDocuments();
-      setDocuments(data);
+      const { data } = await getSources();
+      setSources(data);
     } catch (e) {
-      addLog(`Documents fetch failed: ${e.message}`, 'ERROR');
+      addLog(`Sources fetch failed: ${e.message}`, 'ERROR');
     }
   }, [addLog]);
 
@@ -64,7 +65,7 @@ export function SystemProvider({ children }) {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     refreshStats();
-    refreshDocuments();
+    refreshSources();
     refreshIngestStatus();
 
     const id = setInterval(() => {
@@ -73,30 +74,30 @@ export function SystemProvider({ children }) {
     }, 3000);
 
     return () => clearInterval(id);
-  }, [refreshStats, refreshDocuments, refreshIngestStatus]);
+  }, [refreshStats, refreshSources, refreshIngestStatus]);
 
   // Poll faster during ingestion
   useEffect(() => {
     if (!ingestStatus?.is_ingesting) return;
     const id = setInterval(() => {
       refreshIngestStatus();
-      refreshDocuments();
+      refreshSources();
       refreshStats();
     }, 1000);
     return () => clearInterval(id);
-  }, [ingestStatus?.is_ingesting, refreshIngestStatus, refreshDocuments, refreshStats]);
+  }, [ingestStatus?.is_ingesting, refreshIngestStatus, refreshSources, refreshStats]);
 
   const value = {
     stats,
     ingestStatus,
-    documents,
+    sources,
     health,
     lastLatency,
     error,
     logs,
     addLog,
     refreshStats,
-    refreshDocuments,
+    refreshSources,
     refreshIngestStatus,
   };
 
