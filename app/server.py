@@ -20,10 +20,6 @@ from app.core.config import (
     EMBEDDING_DIM,
     HOST,
     PORT,
-    DB_PATH,
-    INDEX_PATH,
-    UPLOAD_DIR,
-    AUDIO_DIR,
     MAX_UPLOAD_BYTES,
     CORS_ORIGINS,
     ADMIN_TOKEN,
@@ -39,6 +35,12 @@ from app.core.engine import VectorEngine
 from app.core.llm import OllamaLLM
 from app.core.fusion import reciprocal_rank_fusion
 from app.core.agent import RetrievalAgent
+
+# Per-notebook runtime registry (Step 2 below) needs these.
+import threading as _threading
+from collections import namedtuple
+from app.core import notebooks, migration
+from app.core.config import db_path as nb_db_path, index_path as nb_index_path
 
 try:
     from docx import Document
@@ -60,6 +62,35 @@ logger = logging.getLogger(__name__)
 
 if not DOCX_AVAILABLE:
     logger.warning("python-docx not available. .docx files will not be supported.")
+
+# ============================================================================
+# NOTEBOOK RUNTIME REGISTRY
+# ============================================================================
+#
+# One VectorEngine + db_path pair per notebook, created lazily on first use
+# and cached for the process lifetime. The embedding model itself is shared
+# across engines (VectorEngine loads it lazily/once), so opening many
+# notebooks does not multiply model memory.
+
+Runtime = namedtuple("Runtime", ["db_path", "engine"])
+_runtimes: dict[str, "Runtime"] = {}
+_runtimes_lock = _threading.Lock()
+
+
+def get_runtime(nb_id: str) -> Runtime:
+    if notebooks.get_notebook(nb_id) is None:
+        raise HTTPException(status_code=404, detail=f"Notebook '{nb_id}' not found")
+    with _runtimes_lock:
+        rt = _runtimes.get(nb_id)
+        if rt is None:
+            engine = VectorEngine(nb_index_path(nb_id))
+            rt = Runtime(db_path=nb_db_path(nb_id), engine=engine)
+            # Auto-rebuild this notebook's index if its DB has docs but index is empty.
+            if database.get_document_count(rt.db_path) > 0 and engine.get_total_vectors() == 0:
+                _rebuild_runtime(rt)
+            _runtimes[nb_id] = rt
+        return rt
+
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -231,16 +262,14 @@ class GitHubIngestRequest(BaseModel):
 # LIFECYCLE
 # ============================================================================
 
-engine: Optional[VectorEngine] = None
 llm: Optional[OllamaLLM] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    global engine, llm
-    database.init_db()
-    engine = VectorEngine()
+    global llm
+    migration.migrate_legacy_layout()
     llm = OllamaLLM()
     await llm.warmup()
 
@@ -250,54 +279,32 @@ async def lifespan(app: FastAPI):
     # tts.warmup() itself and must never affect startup.
     asyncio.create_task(run_in_threadpool(tts.warmup))
 
-    # Auto-rebuild index if DB has documents but FAISS is empty
-    db_count = database.get_document_count()
-    faiss_count = engine.get_total_vectors()
-    if db_count > 0 and faiss_count == 0:
-        logger.info(
-            f"Index is empty but DB has {db_count} documents. Rebuilding index..."
-        )
-        _rebuild_index()
-
-    logger.info(
-        f"System ready. Documents in DB: {database.get_document_count()}, "
-        f"Vectors in FAISS: {engine.get_total_vectors()}"
-    )
+    # Notebook runtimes lazy-load on first request (see get_runtime); there is
+    # no single global index/DB to rebuild or warm at startup anymore.
+    logger.info("System ready. Notebook runtimes load lazily on first request.")
     yield
     # Shutdown
-    if engine:
-        engine.save()
-        logger.info("Index saved.")
+    for rt in _runtimes.values():
+        rt.engine.save()
+    logger.info("Saved %d loaded notebook runtime(s).", len(_runtimes))
 
 
-def _rebuild_index():
-    """Rebuild FAISS index from all documents in the database"""
-    global engine
+def _rebuild_runtime(rt: "Runtime"):
+    """Rebuild one notebook's FAISS index from all documents in its DB."""
     import faiss
-    from app.core.config import EMBEDDING_DIM
-
-    all_docs = database.get_all_documents()
+    all_docs = database.get_all_documents(rt.db_path)
+    base_index = faiss.IndexFlatIP(rt.engine.dimension)
+    rt.engine.index = faiss.IndexIDMap(base_index)
     if not all_docs:
-        logger.info("No documents to rebuild index from.")
+        rt.engine.save()
         return 0
-
-    # Create a fresh index
-    base_index = faiss.IndexFlatIP(EMBEDDING_DIM)
-    engine.index = faiss.IndexIDMap(base_index)
-
-    # Batch embed all document contents
-    texts = [doc["content"] for doc in all_docs]
-    doc_ids = [doc["id"] for doc in all_docs]
-
+    texts = [d["content"] for d in all_docs]
+    doc_ids = [d["id"] for d in all_docs]
     batch_size = 64
     for i in range(0, len(texts), batch_size):
-        batch_texts = texts[i : i + batch_size]
-        batch_ids = doc_ids[i : i + batch_size]
-        embeddings = engine.embed_batch(batch_texts)
-        engine.add_to_index(embeddings, doc_ids=batch_ids)
-
-    engine.save()
-    logger.info(f"\u2705 Index rebuilt with {len(all_docs)} documents.")
+        embeddings = rt.engine.embed_batch(texts[i:i + batch_size])
+        rt.engine.add_to_index(embeddings, doc_ids=doc_ids[i:i + batch_size])
+    rt.engine.save()
     return len(all_docs)
 
 

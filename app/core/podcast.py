@@ -34,7 +34,6 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
 from . import database, tts
-from .config import AUDIO_DIR
 from .llm import OllamaLLM
 
 logger = logging.getLogger(__name__)
