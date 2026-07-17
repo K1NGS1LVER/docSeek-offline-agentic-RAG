@@ -37,7 +37,6 @@ from app.core.fusion import reciprocal_rank_fusion
 from app.core.agent import RetrievalAgent
 
 # Per-notebook runtime registry (Step 2 below) needs these.
-import threading as _threading
 from collections import namedtuple
 from app.core import notebooks, migration
 from app.core.config import db_path as nb_db_path, index_path as nb_index_path
@@ -74,7 +73,7 @@ if not DOCX_AVAILABLE:
 
 Runtime = namedtuple("Runtime", ["db_path", "engine"])
 _runtimes: dict[str, "Runtime"] = {}
-_runtimes_lock = _threading.Lock()
+_runtimes_lock = threading.Lock()
 
 
 def get_runtime(nb_id: str) -> Runtime:
@@ -284,9 +283,11 @@ async def lifespan(app: FastAPI):
     logger.info("System ready. Notebook runtimes load lazily on first request.")
     yield
     # Shutdown
-    for rt in _runtimes.values():
+    with _runtimes_lock:
+        _open_runtimes = list(_runtimes.values())
+    for rt in _open_runtimes:
         rt.engine.save()
-    logger.info("Saved %d loaded notebook runtime(s).", len(_runtimes))
+    logger.info("Saved %d loaded notebook runtime(s).", len(_open_runtimes))
 
 
 def _rebuild_runtime(rt: "Runtime"):
