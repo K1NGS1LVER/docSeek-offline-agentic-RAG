@@ -330,6 +330,58 @@ def require_admin(x_admin_token: Optional[str] = Header(None)):
         raise HTTPException(status_code=401, detail="Admin token required")
 
 # ============================================================================
+# NOTEBOOKS
+# ============================================================================
+
+
+class NotebookCreate(BaseModel):
+    name: str
+    emoji: str | None = None
+
+
+class NotebookUpdate(BaseModel):
+    name: str
+    emoji: str
+
+
+@app.get("/notebooks")
+async def get_notebooks():
+    rows = notebooks.list_notebooks()
+    out = []
+    for r in rows:
+        p = nb_db_path(r["id"])
+        try:
+            srcs = len(database.list_sources(p))
+            docs = database.get_document_count(p)
+        except Exception:
+            srcs, docs = 0, 0
+        out.append({**r, "sources": srcs, "documents": docs})
+    return out
+
+
+@app.post("/notebooks")
+async def post_notebook(body: NotebookCreate):
+    return notebooks.create_notebook(body.name, body.emoji or "📓")
+
+
+@app.patch("/notebooks/{nb_id}")
+async def patch_notebook(nb_id: str, body: NotebookUpdate):
+    rec = notebooks.rename_notebook(nb_id, body.name, body.emoji)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    return rec
+
+
+@app.delete("/notebooks/{nb_id}")
+async def del_notebook(nb_id: str):
+    if not notebooks.delete_notebook(nb_id):
+        raise HTTPException(status_code=404, detail="Notebook not found")
+    with _runtimes_lock:
+        _runtimes.pop(nb_id, None)
+    return {"deleted": True}
+
+
+# ============================================================================
 # INGEST & SEARCH
 # ============================================================================
 
