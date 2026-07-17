@@ -27,7 +27,7 @@ export default function WorkspaceHeader({
       <IconButton
         icon={PanelLeft}
         onClick={onToggleSources}
-        title={sourcesOpen ? 'Hide sources' : 'Show sources'}
+        title={sourcesOpen ? 'Hide sources ([)' : 'Show sources ([)'}
         className={sourcesOpen ? '' : 'text-accent'}
       />
       <Link to="/" className="font-serif font-semibold text-lg tracking-tight text-text">
@@ -61,7 +61,7 @@ export default function WorkspaceHeader({
       <IconButton
         icon={PanelRight}
         onClick={onToggleStudio}
-        title={studioOpen ? 'Hide studio' : 'Show studio'}
+        title={studioOpen ? 'Hide studio (])' : 'Show studio (])'}
         className={studioOpen ? '' : 'text-accent'}
       />
     </header>

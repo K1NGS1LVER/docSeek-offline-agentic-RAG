@@ -1,57 +1,149 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download } from 'lucide-react';
+import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download, Copy, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { search, ask, research, transcribe, synthesizeSpeech, getDocumentViewUrl } from '../lib/api';
+import { search, ask, research, transcribe, streamSpeech, synthesizeSpeech, getDocumentViewUrl } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
 import { Segmented, Chip } from './ui';
 
-/* ── Read-aloud button for an answer (local Kokoro TTS via /tts) ────── */
+const TTS_SAMPLE_RATE = 24000;
+
+/* ── Read-aloud button for an answer (local Kokoro TTS, streamed) ───── */
 function SpeakButton({ text }) {
   const [state, setState] = useState('idle'); // idle | loading | playing
-  const audioRef = useRef(null);
-  const urlRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const scheduledRef = useRef([]);
+  const abortRef = useRef(null);
+  const playHeadRef = useRef(0);
+  const streamDoneRef = useRef(false);
+  const fallbackAudioRef = useRef(null);
+  const fallbackUrlRef = useRef(null);
 
-  const cleanup = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
+  const getContext = () => {
+    if (!audioCtxRef.current) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      audioCtxRef.current = new Ctx();
     }
-    if (urlRef.current) {
-      URL.revokeObjectURL(urlRef.current);
-      urlRef.current = null;
-    }
+    return audioCtxRef.current;
   };
 
-  useEffect(() => cleanup, []);
+  const stopStreaming = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    scheduledRef.current.forEach((source) => {
+      source.onended = null;
+      try {
+        source.stop();
+      } catch {
+        // already stopped/ended
+      }
+    });
+    scheduledRef.current = [];
+    streamDoneRef.current = false;
+  }, []);
+
+  const stopFallback = useCallback(() => {
+    if (fallbackAudioRef.current) {
+      fallbackAudioRef.current.pause();
+      fallbackAudioRef.current = null;
+    }
+    if (fallbackUrlRef.current) {
+      URL.revokeObjectURL(fallbackUrlRef.current);
+      fallbackUrlRef.current = null;
+    }
+  }, []);
+
+  const stopAll = useCallback(() => {
+    stopStreaming();
+    stopFallback();
+  }, [stopStreaming, stopFallback]);
+
+  useEffect(
+    () => () => {
+      stopAll();
+      audioCtxRef.current?.close();
+    },
+    [stopAll]
+  );
+
+  // Non-streaming fallback (single WAV) for when /tts/stream itself fails
+  // before any audio has played.
+  const playFallback = async (clean) => {
+    const url = await synthesizeSpeech(clean);
+    fallbackUrlRef.current = url;
+    const audio = new Audio(url);
+    fallbackAudioRef.current = audio;
+    audio.onended = () => {
+      stopFallback();
+      setState('idle');
+    };
+    audio.onerror = () => {
+      stopFallback();
+      setState('idle');
+    };
+    await audio.play();
+    setState('playing');
+  };
 
   const toggle = async () => {
     if (state === 'playing' || state === 'loading') {
-      cleanup();
+      stopAll();
       setState('idle');
       return;
     }
+
     setState('loading');
+    const clean = text.replace(/\[\d{1,2}\]/g, '').replace(/[#*_`>]/g, '');
+    const ctx = getContext();
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    streamDoneRef.current = false;
+    playHeadRef.current = ctx.currentTime + 0.05;
+    let firstChunk = true;
+
+    const scheduleChunk = (samples) => {
+      if (!samples.length) return;
+      const buffer = ctx.createBuffer(1, samples.length, TTS_SAMPLE_RATE);
+      buffer.copyToChannel(samples, 0);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      const startAt = Math.max(playHeadRef.current, ctx.currentTime);
+      source.start(startAt);
+      playHeadRef.current = startAt + buffer.duration;
+      scheduledRef.current.push(source);
+      source.onended = () => {
+        scheduledRef.current = scheduledRef.current.filter((s) => s !== source);
+        if (streamDoneRef.current && scheduledRef.current.length === 0) {
+          setState('idle');
+        }
+      };
+      if (firstChunk) {
+        firstChunk = false;
+        setState('playing');
+      }
+    };
+
     try {
-      // Strip markdown/citation noise so the model reads clean prose.
-      const clean = text.replace(/\[\d{1,2}\]/g, '').replace(/[#*_`>]/g, '');
-      const url = await synthesizeSpeech(clean);
-      urlRef.current = url;
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => {
-        cleanup();
+      await streamSpeech(clean, { signal: controller.signal, onSamples: scheduleChunk });
+      streamDoneRef.current = true;
+      if (scheduledRef.current.length === 0) setState('idle');
+    } catch (err) {
+      if (err.name === 'AbortError') return; // user hit Stop; already handled
+      if (!firstChunk) {
+        // Partial audio already played; don't restart via the fallback path.
+        stopStreaming();
         setState('idle');
-      };
-      audio.onerror = () => {
-        cleanup();
+        return;
+      }
+      try {
+        await playFallback(clean);
+      } catch {
+        stopAll();
         setState('idle');
-      };
-      await audio.play();
-      setState('playing');
-    } catch {
-      cleanup();
-      setState('idle');
+      }
     }
   };
 
@@ -64,6 +156,27 @@ function SpeakButton({ text }) {
       className={state === 'loading' ? '[&_svg]:animate-spin' : ''}
     >
       {state === 'playing' ? 'Stop' : 'Listen'}
+    </Chip>
+  );
+}
+
+/* ── Copy-to-clipboard button for an answer ──────────────────────────── */
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard permission denied/unavailable; nothing more we can do
+    }
+  };
+
+  return (
+    <Chip icon={copied ? Check : Copy} onClick={copy} title="Copy answer to clipboard">
+      {copied ? 'Copied' : 'Copy'}
     </Chip>
   );
 }
@@ -155,6 +268,16 @@ const STAGE_STYLES = {
 /* ── Agent activity timeline ───────────────────────── */
 function AgentTrace({ trace, isStreaming }) {
   const [open, setOpen] = useState(true);
+  const [collapsedOnFinish, setCollapsedOnFinish] = useState(false);
+
+  // Auto-collapse once the answer finishes so completed turns stay tidy;
+  // only ever does this once so a manual re-open sticks (state adjusted
+  // during render, not in an effect).
+  if (!isStreaming && !collapsedOnFinish) {
+    setCollapsedOnFinish(true);
+    setOpen(false);
+  }
+
   if (!trace || trace.length === 0) return null;
 
   return (
@@ -269,6 +392,29 @@ function SourcesRow({ sources }) {
   );
 }
 
+/* ── Collapsible sources disclosure (collapsed by default) ──────────── */
+function CollapsibleSources({ sources }) {
+  const [open, setOpen] = useState(false);
+  if (!sources || sources.length === 0) return null;
+
+  return (
+    <div className="w-full">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 h-7 px-1 -ml-1 font-mono text-2xs tracking-[0.14em] uppercase text-text-muted hover:text-accent transition-colors"
+      >
+        Sources ({sources.length})
+        <ChevronDown className={`w-3 h-3 transition-transform ${open ? '' : '-rotate-90'}`} />
+      </button>
+      {open && (
+        <div className="flex flex-wrap items-center gap-2 mt-2 max-h-48 overflow-y-auto pr-1">
+          <SourcesRow sources={sources} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Search result card ────────────────────────────── */
 function ResultCard({ result, index }) {
   const pct = Math.round(Math.min(Math.max(result.score, 0), 1) * 100);
@@ -322,7 +468,13 @@ function buildSuggestions(sources) {
 }
 
 /* ================================================================== */
-export default function ChatPanel({ sourceFilter, selectedCount, totalSources, onSaveNote }) {
+export default function ChatPanel({
+  sourceFilter,
+  selectedCount,
+  totalSources,
+  onSaveNote,
+  onQuestionsChange,
+}) {
   const { addLog } = useSystem();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -331,6 +483,8 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
   const [mode, setMode] = useState('ask');
   const [micError, setMicError] = useState('');
   const endRef = useRef(null);
+  const nextIdRef = useRef(1);
+  const questionsRef = useRef([]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -338,6 +492,14 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
 
   const { sources: allSources } = useSystem();
   const suggestions = useMemo(() => buildSuggestions(allSources), [allSources]);
+
+  // Records every question asked this session, so the Studio panel's Chat
+  // tab can list and jump to them. Only fires when a question is submitted,
+  // never on streaming token updates.
+  const addQuestion = (id, text) => {
+    questionsRef.current = [...questionsRef.current, { id, text }];
+    onQuestionsChange?.(questionsRef.current);
+  };
 
   const submitQuery = async (query) => {
     if (!query.trim() || isSearching || selectedCount === 0) return;
@@ -353,7 +515,9 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
 
   const performSearch = async (query) => {
     const k = topK === 'auto' ? 5 : topK;
-    setMessages((prev) => [...prev, { type: 'query', text: query, ts: Date.now() }]);
+    const qId = nextIdRef.current++;
+    setMessages((prev) => [...prev, { type: 'query', id: qId, text: query, ts: Date.now() }]);
+    addQuestion(qId, query);
     setInput('');
     setIsSearching(true);
     addLog(`Query: "${query}" (k=${k})`);
@@ -362,11 +526,14 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
       const { data, latency } = await search(query, k, false, sourceFilter);
       setMessages((prev) => [
         ...prev,
-        { type: 'result', results: data, latency, query, ts: Date.now() },
+        { type: 'result', id: nextIdRef.current++, results: data, latency, query, ts: Date.now() },
       ]);
       addLog(`Results: ${data.length} chunks in ${latency}ms`);
     } catch (err) {
-      setMessages((prev) => [...prev, { type: 'error', text: err.message, ts: Date.now() }]);
+      setMessages((prev) => [
+        ...prev,
+        { type: 'error', id: nextIdRef.current++, text: err.message, ts: Date.now() },
+      ]);
       addLog(`Search error: ${err.message}`, 'ERROR');
     } finally {
       setIsSearching(false);
@@ -374,14 +541,19 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
   };
 
   const handleAsk = async (query) => {
-    setMessages((prev) => [...prev, { type: 'query', text: query, ts: Date.now() }]);
+    const qId = nextIdRef.current++;
+    setMessages((prev) => [...prev, { type: 'query', id: qId, text: query, ts: Date.now() }]);
+    addQuestion(qId, query);
     setInput('');
     setIsSearching(true);
     addLog(`Ask AI: "${query}" (k=${topK})`);
 
     setMessages((prev) => [
       ...prev,
-      { type: 'answer', query, text: '', trace: [], sources: [], isStreaming: true, ts: Date.now() },
+      {
+        type: 'answer', id: nextIdRef.current++, query, text: '', trace: [], sources: [],
+        isStreaming: true, ts: Date.now(),
+      },
     ]);
 
     const updateLast = (patch) => {
@@ -412,7 +584,10 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
       updateLast(() => ({ text: data, isStreaming: false, latency }));
       addLog(`Answered in ${latency}ms`);
     } catch (err) {
-      setMessages((prev) => [...prev, { type: 'error', text: err.message, ts: Date.now() }]);
+      setMessages((prev) => [
+        ...prev,
+        { type: 'error', id: nextIdRef.current++, text: err.message, ts: Date.now() },
+      ]);
       addLog(`Ask error: ${err.message}`, 'ERROR');
     } finally {
       setIsSearching(false);
@@ -420,7 +595,9 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
   };
 
   const handleResearch = async (query) => {
-    setMessages((prev) => [...prev, { type: 'query', text: query, ts: Date.now() }]);
+    const qId = nextIdRef.current++;
+    setMessages((prev) => [...prev, { type: 'query', id: qId, text: query, ts: Date.now() }]);
+    addQuestion(qId, query);
     setInput('');
     setIsSearching(true);
     addLog(`Research: "${query}"`);
@@ -428,7 +605,7 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
     setMessages((prev) => [
       ...prev,
       {
-        type: 'answer', query, text: '', trace: [], sources: [],
+        type: 'answer', id: nextIdRef.current++, query, text: '', trace: [], sources: [],
         isStreaming: true, isReport: true, ts: Date.now(),
       },
     ]);
@@ -458,7 +635,10 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
       updateLast(() => ({ text: data, isStreaming: false, latency }));
       addLog(`Report ready in ${latency}ms`);
     } catch (err) {
-      setMessages((prev) => [...prev, { type: 'error', text: err.message, ts: Date.now() }]);
+      setMessages((prev) => [
+        ...prev,
+        { type: 'error', id: nextIdRef.current++, text: err.message, ts: Date.now() },
+      ]);
       addLog(`Research error: ${err.message}`, 'ERROR');
     } finally {
       setIsSearching(false);
@@ -497,11 +677,12 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
             </div>
           )}
 
-          {messages.map((msg, idx) => {
+          {messages.map((msg) => {
             if (msg.type === 'query') {
               return (
                 <motion.div
-                  key={idx}
+                  key={msg.id}
+                  id={`chat-q-${msg.id}`}
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="self-end max-w-[80%] bg-accent-soft border border-accent-2 rounded-xl rounded-br-sm px-4 py-3 text-base text-text"
@@ -514,7 +695,7 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
             if (msg.type === 'answer') {
               return (
                 <motion.div
-                  key={idx}
+                  key={msg.id}
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   className="space-y-2"
@@ -532,10 +713,10 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
                       )}
                     </div>
                     {(msg.sources?.length > 0 || msg.latency != null) && (
-                      <div className="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-border">
-                        <SourcesRow sources={msg.sources} />
+                      <div className="mt-4 pt-4 border-t border-border space-y-3">
+                        <CollapsibleSources sources={msg.sources} />
                         {!msg.isStreaming && msg.text && (
-                          <>
+                          <div className="flex flex-wrap items-center gap-2">
                             <Chip
                               icon={StickyNote}
                               onClick={() => onSaveNote({ title: msg.query, body: msg.text })}
@@ -552,13 +733,14 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
                                 Download .md
                               </Chip>
                             )}
+                            <CopyButton text={msg.text} />
                             <SpeakButton text={msg.text} />
-                          </>
-                        )}
-                        {msg.latency != null && (
-                          <span className="ml-auto font-mono text-2xs text-text-muted">
-                            {msg.latency}ms
-                          </span>
+                            {msg.latency != null && (
+                              <span className="ml-auto font-mono text-2xs text-text-muted">
+                                {msg.latency}ms
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}
@@ -569,7 +751,7 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
 
             if (msg.type === 'result') {
               return (
-                <div key={idx} className="space-y-2">
+                <div key={msg.id} className="space-y-2">
                   <p className="font-mono text-xs text-text-muted">
                     {msg.results.length} result{msg.results.length !== 1 ? 's' : ''} · {msg.latency}ms
                   </p>
@@ -593,7 +775,7 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
 
             if (msg.type === 'error') {
               return (
-                <div key={idx} className="bg-caution-soft border border-caution/25 rounded-xl px-4 py-3 text-sm text-caution">
+                <div key={msg.id} className="bg-caution-soft border border-caution/25 rounded-xl px-4 py-3 text-sm text-caution">
                   {msg.text}
                 </div>
               );

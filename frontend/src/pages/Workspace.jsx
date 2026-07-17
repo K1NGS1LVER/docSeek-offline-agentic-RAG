@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { SystemProvider, useSystem } from '../lib/SystemContext';
 import WorkspaceHeader from '../components/WorkspaceHeader';
 import SourcesPanel from '../components/SourcesPanel';
@@ -8,6 +9,13 @@ import AddSourcesModal from '../components/AddSourcesModal';
 import SettingsModal from '../components/SettingsModal';
 
 const NOTES_KEY = 'ds_notes';
+const PANELS_KEY = 'ds_panels';
+// Must match SourcesPanel.jsx's w-72 / StudioPanel.jsx's w-80 (theme.css
+// --sources-w / --studio-w) so the slide animation lands on the panel's
+// real rendered width.
+const SOURCES_WIDTH = 288;
+const STUDIO_WIDTH = 320;
+const PANEL_TRANSITION = { duration: 0.2, ease: 'easeInOut' };
 
 function loadNotes() {
   try {
@@ -17,21 +25,51 @@ function loadNotes() {
   }
 }
 
+function loadPanelState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PANELS_KEY));
+    return {
+      sourcesOpen: saved?.sourcesOpen ?? true,
+      studioOpen: saved?.studioOpen ?? true,
+    };
+  } catch {
+    return { sourcesOpen: true, studioOpen: true };
+  }
+}
+
 function WorkspaceInner({ theme, setTheme }) {
   const { stats, sources } = useSystem();
 
   // Retrieval scope: sources are included by default; unchecked ones are excluded.
   const [unchecked, setUnchecked] = useState(() => new Set());
-  const [sourcesOpen, setSourcesOpen] = useState(true);
-  const [studioOpen, setStudioOpen] = useState(true);
+  const [sourcesOpen, setSourcesOpen] = useState(() => loadPanelState().sourcesOpen);
+  const [studioOpen, setStudioOpen] = useState(() => loadPanelState().studioOpen);
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autoOpenedAdd, setAutoOpenedAdd] = useState(false);
   const [notes, setNotes] = useState(loadNotes);
+  const [questions, setQuestions] = useState([]);
 
   useEffect(() => {
     localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
   }, [notes]);
+
+  useEffect(() => {
+    localStorage.setItem(PANELS_KEY, JSON.stringify({ sourcesOpen, studioOpen }));
+  }, [sourcesOpen, studioOpen]);
+
+  // [ / ] toggle the sidebars, ignored while typing anywhere.
+  useEffect(() => {
+    const handler = (e) => {
+      const tag = e.target?.tagName;
+      const typing = tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable;
+      if (typing) return;
+      if (e.key === '[') setSourcesOpen((v) => !v);
+      else if (e.key === ']') setStudioOpen((v) => !v);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   // NotebookLM-style onboarding: an empty library opens the add-sources
   // dialog once, so the first action is obvious (state adjusted during
@@ -75,27 +113,51 @@ function WorkspaceInner({ theme, setTheme }) {
         onToggleStudio={() => setStudioOpen((v) => !v)}
       />
       <div className="flex flex-1 overflow-hidden">
-        {sourcesOpen && (
-          <SourcesPanel
-            unchecked={unchecked}
-            setUnchecked={setUnchecked}
-            onAdd={() => setAddOpen(true)}
-          />
-        )}
+        <AnimatePresence initial={false}>
+          {sourcesOpen && (
+            <motion.div
+              key="sources"
+              initial={{ width: 0 }}
+              animate={{ width: SOURCES_WIDTH }}
+              exit={{ width: 0 }}
+              transition={PANEL_TRANSITION}
+              className="flex overflow-hidden flex-shrink-0"
+            >
+              <SourcesPanel
+                unchecked={unchecked}
+                setUnchecked={setUnchecked}
+                onAdd={() => setAddOpen(true)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
         <ChatPanel
           sourceFilter={sourceFilter}
           selectedCount={selected.length}
           totalSources={sources.length}
           onSaveNote={addNote}
+          onQuestionsChange={setQuestions}
         />
-        {studioOpen && (
-          <StudioPanel
-            notes={notes}
-            onAddNote={addNote}
-            onDeleteNote={deleteNote}
-            selectedSources={selected.map((s) => s.source_file)}
-          />
-        )}
+        <AnimatePresence initial={false}>
+          {studioOpen && (
+            <motion.div
+              key="studio"
+              initial={{ width: 0 }}
+              animate={{ width: STUDIO_WIDTH }}
+              exit={{ width: 0 }}
+              transition={PANEL_TRANSITION}
+              className="flex overflow-hidden flex-shrink-0"
+            >
+              <StudioPanel
+                notes={notes}
+                onAddNote={addNote}
+                onDeleteNote={deleteNote}
+                selectedSources={selected.map((s) => s.source_file)}
+                questions={questions}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {addOpen && <AddSourcesModal onClose={() => setAddOpen(false)} />}

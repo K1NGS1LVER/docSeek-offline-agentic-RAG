@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Trash2, Loader2, Mic, Download, AlertCircle, X } from 'lucide-react';
 import { useSystem } from '../lib/SystemContext';
 import { getPodcastAudioUrl } from '../lib/api';
@@ -352,8 +352,84 @@ function EngineTab() {
   );
 }
 
-export default function StudioPanel({ notes, onAddNote, onDeleteNote, selectedSources = [] }) {
+/* ── Chat tab: jump-to-question nav for the current conversation ────── */
+function ChatTab({ questions }) {
+  const [activeId, setActiveId] = useState(null);
+
+  useEffect(() => {
+    if (questions.length === 0) return undefined;
+    const targets = questions
+      .map((q) => document.getElementById(`chat-q-${q.id}`))
+      .filter(Boolean);
+    if (targets.length === 0) return undefined;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting);
+        if (visible.length === 0) return;
+        const topMost = visible.reduce((a, b) =>
+          a.boundingClientRect.top < b.boundingClientRect.top ? a : b
+        );
+        setActiveId(Number(topMost.target.id.replace('chat-q-', '')));
+      },
+      { rootMargin: '-10% 0px -70% 0px', threshold: 0 }
+    );
+    targets.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [questions]);
+
+  if (questions.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-sm text-text-muted">No questions yet.</p>
+        <p className="text-xs text-text-muted mt-1">Ask something to build a jump list here.</p>
+      </div>
+    );
+  }
+
+  const jumpTo = (id) => {
+    document.getElementById(`chat-q-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  return (
+    <div className="space-y-1">
+      <SectionLabel className="px-3 mb-1">Questions</SectionLabel>
+      {questions.map((q, i) => (
+        <button
+          key={q.id}
+          type="button"
+          onClick={() => jumpTo(q.id)}
+          className={`w-full text-left flex items-start gap-2 px-3 py-2 rounded-lg text-sm transition-colors border ${
+            activeId === q.id
+              ? 'bg-accent-soft text-accent border-accent-2'
+              : 'text-text-dim border-transparent hover:bg-panel'
+          }`}
+        >
+          <span className="font-mono text-2xs text-text-muted flex-shrink-0 mt-0.5">{i + 1}</span>
+          <span className="line-clamp-2">{q.text}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export default function StudioPanel({
+  notes,
+  onAddNote,
+  onDeleteNote,
+  selectedSources = [],
+  questions = [],
+}) {
   const [tab, setTab] = useState('notes');
+  const [autoSwitched, setAutoSwitched] = useState(false);
+
+  // Jump straight to the question list the first time a conversation
+  // starts, without fighting a manual tab switch afterward (state adjusted
+  // during render, not in an effect).
+  if (questions.length > 0 && !autoSwitched) {
+    setAutoSwitched(true);
+    setTab('chat');
+  }
 
   return (
     <aside className="w-80 flex-shrink-0 bg-surface border-l border-border flex flex-col min-h-0">
@@ -363,6 +439,7 @@ export default function StudioPanel({ notes, onAddNote, onDeleteNote, selectedSo
           value={tab}
           onChange={setTab}
           options={[
+            { value: 'chat', label: 'Chat' },
             { value: 'notes', label: 'Notes' },
             { value: 'audio', label: 'Audio' },
             { value: 'engine', label: 'Engine' },
@@ -370,6 +447,7 @@ export default function StudioPanel({ notes, onAddNote, onDeleteNote, selectedSo
         />
       </div>
       <div className="flex-1 overflow-y-auto px-4 pb-4 pt-2">
+        {tab === 'chat' && <ChatTab questions={questions} />}
         {tab === 'notes' && <NotesTab notes={notes} onAdd={onAddNote} onDelete={onDeleteNote} />}
         {tab === 'audio' && <AudioTab selectedSources={selectedSources} />}
         {tab === 'engine' && <EngineTab />}
