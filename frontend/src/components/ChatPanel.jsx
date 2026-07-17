@@ -1,10 +1,86 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote } from 'lucide-react';
+import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { search, ask, getDocumentViewUrl } from '../lib/api';
+import { search, ask, transcribe, getDocumentViewUrl } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
 import { Segmented, Chip } from './ui';
+
+/* ── Push-to-talk dictation button (local Whisper via /transcribe) ──── */
+function MicButton({ disabled, onText, onError }) {
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const recorderRef = useRef(null);
+  const chunksRef = useRef([]);
+
+  const stop = () => {
+    recorderRef.current?.stop();
+    setRecording(false);
+  };
+
+  const start = async () => {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      onError?.('Dictation is not supported in this browser.');
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      onError?.('Microphone access denied. Allow the mic to dictate.');
+      return;
+    }
+    const mr = new MediaRecorder(stream);
+    chunksRef.current = [];
+    mr.ondataavailable = (e) => {
+      if (e.data && e.data.size) chunksRef.current.push(e.data);
+    };
+    mr.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' });
+      if (!blob.size) return;
+      setTranscribing(true);
+      try {
+        const { data } = await transcribe(blob);
+        if (data.text?.trim()) onText(data.text.trim());
+        else onError?.('No speech detected — try again.');
+      } catch (err) {
+        onError?.(err.message || 'Transcription failed.');
+      } finally {
+        setTranscribing(false);
+      }
+    };
+    mr.start();
+    recorderRef.current = mr;
+    setRecording(true);
+  };
+
+  const busy = transcribing;
+  const label = recording ? 'Stop recording' : busy ? 'Transcribing…' : 'Dictate (local speech-to-text)';
+
+  return (
+    <button
+      type="button"
+      onClick={recording ? stop : start}
+      disabled={disabled || busy}
+      title={label}
+      aria-label={label}
+      className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 transition-all disabled:text-disabled-fg disabled:pointer-events-none ${
+        recording
+          ? 'bg-caution-soft text-caution'
+          : 'text-text-muted hover:text-accent hover:bg-panel'
+      }`}
+    >
+      {busy ? (
+        <Loader2 className="w-4 h-4 animate-spin" />
+      ) : recording ? (
+        <Square className="w-3.5 h-3.5 fill-current animate-pulse" />
+      ) : (
+        <Mic className="w-4 h-4" />
+      )}
+    </button>
+  );
+}
 
 const STAGE_STYLES = {
   plan: 'text-accent',
@@ -179,6 +255,7 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
   const [isSearching, setIsSearching] = useState(false);
   const [topK, setTopK] = useState('auto');
   const [mode, setMode] = useState('ask');
+  const [micError, setMicError] = useState('');
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -426,6 +503,17 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
               <option key={k} value={k}>k · {k}</option>
             ))}
           </select>
+          <MicButton
+            disabled={isSearching || !canType}
+            onText={(text) => {
+              setMicError('');
+              setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+            }}
+            onError={(msg) => {
+              setMicError(msg);
+              addLog(`Dictation: ${msg}`, 'ERROR');
+            }}
+          />
           <button
             type="submit"
             disabled={isSearching || !input.trim() || !canType}
@@ -435,13 +523,19 @@ export default function ChatPanel({ sourceFilter, selectedCount, totalSources, o
             {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           </button>
         </form>
-        <p className="text-center font-mono text-2xs uppercase tracking-[0.1em] text-text-muted mt-2">
-          grounded in{' '}
-          <b className="text-accent">
-            {selectedCount} of {totalSources} source{totalSources !== 1 ? 's' : ''}
-          </b>{' '}
-          · all local
-        </p>
+        {micError ? (
+          <p className="text-center font-mono text-2xs uppercase tracking-[0.1em] text-caution mt-2">
+            {micError}
+          </p>
+        ) : (
+          <p className="text-center font-mono text-2xs uppercase tracking-[0.1em] text-text-muted mt-2">
+            grounded in{' '}
+            <b className="text-accent">
+              {selectedCount} of {totalSources} source{totalSources !== 1 ? 's' : ''}
+            </b>{' '}
+            · all local
+          </p>
+        )}
       </div>
     </section>
   );

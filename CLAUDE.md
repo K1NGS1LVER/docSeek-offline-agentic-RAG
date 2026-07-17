@@ -76,6 +76,14 @@ npm run preview   # preview production build
 7. **Sources** (`GET /sources`): one row per source file (filename, chunk count, chunking strategy, `first_chunk_id` usable with `/document/view`), aggregated by `database.list_sources`.
    This powers the workspace Sources panel; `GET /documents` (bare filename list) remains for compatibility, and `DELETE /documents?source_file=` deletes a whole source from both DB and index.
 
+### Local media features
+
+These build on the same one-time-download-then-offline model story as the embedder/reranker; each lazy-loads its model on first use.
+
+- **Dictation** (`POST /transcribe`): `app/core/stt.py` is a lazy-loaded faster-whisper singleton (`STT_MODEL`, env `DOCSEEK_STT_MODEL`, default `small`, int8/CPU) mirroring `reranker.py`'s pattern (`is_available()`, thread-safe load-on-first-use).
+  The endpoint accepts a MediaRecorder audio `UploadFile` (webm/ogg/wav; faster-whisper decodes any container via bundled PyAV), runs transcription in `run_in_threadpool`, and returns `{"text", "language", "duration"}`; it reuses the `MAX_UPLOAD_BYTES` guard and returns 503 when the model can't load.
+  Frontend: a push-to-talk `MicButton` in `ChatPanel`'s ask bar records via MediaRecorder, POSTs the blob through `api.js` `transcribe(blob)`, and appends the text into the query input; mic-permission denial and backend-unavailable both surface as an inline caution line.
+
 ### Persistence and lifecycle
 
 - All persistent state lives in `data/`: `docs.db` (SQLite) and `my_index.faiss` (FAISS index), both gitignored. `data/uploads/` keeps a copy of uploaded source files.

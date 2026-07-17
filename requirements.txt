@@ -20,3 +20,4 @@ openai
 json-repair
 sse-starlette
 langgraph
+faster-whisper

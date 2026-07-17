@@ -89,3 +89,14 @@ AGENT_MAX_K = 12
 # Default chunking strategy for ingestion: "auto" | "recursive" | "semantic".
 # "auto" profiles each document and picks per document.
 CHUNKING_STRATEGY = "auto"
+
+# ---------------------------------------------------------------------------
+# Local media features (all on-device, same one-time-download model story as
+# the embedder/reranker): speech-to-text dictation, text-to-speech podcasts,
+# and deep research reports.
+# ---------------------------------------------------------------------------
+
+# faster-whisper (CTranslate2) model size for /transcribe dictation.
+# "small" balances accuracy and CPU cost; "base"/"tiny" are faster, "medium"
+# more accurate. Auto-downloads once from HuggingFace, then cached.
+STT_MODEL = os.environ.get("DOCSEEK_STT_MODEL", "small")

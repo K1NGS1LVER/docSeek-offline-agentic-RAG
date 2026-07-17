@@ -99,6 +99,33 @@ export async function ingestGithub(repoUrl, subpath = null) {
   });
 }
 
+/* ── Dictation (local speech-to-text) ────────────────── */
+
+/**
+ * Transcribe a recorded audio blob to text, fully on-device.
+ * @param {Blob} blob - audio from MediaRecorder (webm/ogg/wav)
+ * @returns {Promise<{data: {text: string, language: string, duration: number}, latency: number}>}
+ */
+export async function transcribe(blob) {
+  const form = new FormData();
+  // Extension hints the container to the backend; content type comes from the blob.
+  const ext = (blob.type && blob.type.includes('ogg')) ? 'ogg'
+    : (blob.type && blob.type.includes('wav')) ? 'wav' : 'webm';
+  form.append('file', blob, `dictation.${ext}`);
+
+  const url = `${BASE}/transcribe`;
+  const start = performance.now();
+  const res = await fetch(url, { method: 'POST', body: form });
+  const latency = Math.round(performance.now() - start);
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(body || `Transcription failed: HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  return { data, latency };
+}
+
 /* ── Search / Query ──────────────────────────────────── */
 
 export async function search(query, k = 5, rerank = false, sourceFiles = null) {

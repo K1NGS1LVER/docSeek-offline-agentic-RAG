@@ -32,7 +32,7 @@ from app.core.config import (
     RERANK_CANDIDATE_FACTOR,
     CHUNKING_STRATEGY,
 )
-from app.core import database, parsing, chunking, reranker
+from app.core import database, parsing, chunking, reranker, stt
 from app.core.engine import VectorEngine
 from app.core.llm import OllamaLLM
 from app.core.fusion import reciprocal_rank_fusion
@@ -691,6 +691,56 @@ async def ask(request: AskRequest):
             yield {"data": json.dumps(f"⚠️ Server error: {str(e)}")}
 
     return EventSourceResponse(event_stream())
+
+
+# ============================================================================
+# DICTATION (LOCAL SPEECH-TO-TEXT)
+# ============================================================================
+
+
+@app.post("/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    """Transcribe a recorded audio clip to text, fully on-device.
+
+    Accepts whatever container the browser's MediaRecorder produces
+    (webm/ogg/wav); faster-whisper decodes it via bundled PyAV. Returns
+    {"text", "language", "duration"}.
+    """
+    import tempfile
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty audio upload")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Audio too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)",
+        )
+
+    # Persist to a temp file: faster-whisper decodes from a path.
+    suffix = os.path.splitext(file.filename or "")[1] or ".webm"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    try:
+        tmp.write(content)
+        tmp.close()
+        result = await run_in_threadpool(stt.transcribe, tmp.name)
+    finally:
+        try:
+            os.remove(tmp.name)
+        except OSError:
+            pass
+
+    if result is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Speech-to-text model unavailable. Check server logs; the "
+            "faster-whisper model downloads once on first use.",
+        )
+    logger.info(
+        f"Transcribed {len(content)} bytes → {len(result['text'])} chars "
+        f"({result.get('language')}, {result.get('duration')}s)"
+    )
+    return result
 
 
 # ============================================================================

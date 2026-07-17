@@ -7,6 +7,7 @@ Nothing leaves your machine (model weights are downloaded once from HuggingFace,
 ## 🚀 Features
 
 *   **Agentic retrieval loop (LangGraph):** a local LLM agent, orchestrated as a LangGraph `StateGraph`, plans each query (dynamic top-k, query rewriting, sub-query decomposition), decides whether to rerank, grades the retrieved evidence, and re-loops with a reformulated query when the evidence is weak (CRAG-style). LangGraph is pure orchestration (no network calls), so the local-first guarantee is unchanged.
+*   **Local dictation:** a mic button in the ask bar records your question and transcribes it on-device with faster-whisper (`POST /transcribe`) — no audio ever leaves your machine.
 *   **Hybrid search:** dense vectors (FAISS, `all-mpnet-base-v2`) fused with BM25 keyword search (SQLite FTS5) via Reciprocal Rank Fusion.
 *   **Local cross-encoder reranking:** `ms-marco-MiniLM-L-6-v2` rescores candidates on-device when the agent judges precision matters.
 *   **Broad file support:** ingest `.txt`, `.md`, `.html`, `.docx`, `.pdf`, and `.pptx`. Scanned/image-only PDFs are read via an on-device Tesseract OCR fallback.
@@ -50,6 +51,7 @@ Nothing leaves your machine (model weights are downloaded once from HuggingFace,
 
     ```bash
     pip install -r requirements.txt
+    # (dictation also needs faster-whisper; see the requirements file)
     ```
 
 ## 🏁 Usage
@@ -134,6 +136,17 @@ curl -X POST "http://localhost:8000/upload" \
 *   `semantic` embeds sentences with the local model and places chunk boundaries at topic shifts.
 *   `auto` profiles each document (length, code density, sentence count) and picks a strategy per document.
 
+### 6. Dictation (local speech-to-text)
+
+Click the mic button in the ask bar to dictate a question. The browser records audio and posts it to `POST /transcribe`, which transcribes it on-device with faster-whisper and inserts the text into the query box.
+
+```bash
+curl -X POST "http://localhost:8000/transcribe" -F "file=@clip.webm"
+# -> {"text": "...", "language": "en", "duration": 3.2}
+```
+
+The model (`DOCSEEK_STT_MODEL`, default `small`) downloads once from HuggingFace, then runs fully offline. No audio ever leaves your machine.
+
 ## ⚙️ Configuration
 You can adjust settings in `app/core/config.py`:
 *   **MODEL_NAME:** Change embedding model (e.g., `all-MiniLM-L6-v2` for speed).
@@ -144,6 +157,7 @@ You can adjust settings in `app/core/config.py`:
 *   **MAX_AGENT_LOOPS / AGENT_MIN_K / AGENT_MAX_K:** Bounds for the agent's retry loop and dynamic top-k.
 *   **CHUNKING_STRATEGY:** Default ingestion chunking strategy (`auto`, `recursive`, or `semantic`).
 *   **LLM_MODEL / LLM_BASE_URL:** Local Ollama model used for planning, grading, and answers.
+*   **STT_MODEL:** faster-whisper model size for dictation (env `DOCSEEK_STT_MODEL`; default `small`).
 
 ## ✅ Testing
 
