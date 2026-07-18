@@ -1,252 +1,265 @@
-# docSeek: Local-First Agentic RAG
+# docSeek — Local-First Agentic RAG
 
-A privacy-first, fully local **agentic Retrieval-Augmented Generation (RAG)** system built with **FastAPI**, **FAISS**, **Sentence Transformers**, and **SQLite**. 
+**Chat with your documents, 100% on your machine.** docSeek is a private, NotebookLM-style workspace where an on-device AI agent reads your files, answers questions with inline citations, and can even turn your sources into an audio overview — all without a single byte leaving your computer.
 
-All document processing, embedding generation, vector search, reranking, speech-to-text, text-to-speech, and LLM reasoning run entirely on your device. **Nothing leaves your machine.**
+> Parsing, embeddings, vector search, reranking, speech-to-text, text-to-speech, and LLM reasoning run **entirely on your device**. Model weights download once from HuggingFace, then everything works fully offline.
 
----
-
-## 📖 Table of Contents
-1. [Key Features](#-key-features)
-2. [System Architecture](#%EF%B8%8F-system-architecture)
-3. [Project Structure](#-project-structure)
-4. [Hardware & OS Requirements](#-hardware--os-requirements)
-5. [Step-by-Step Installation](#-step-by-step-installation)
-6. [Quickstart & Usage Guide](#-quickstart--usage-guide)
-7. [Agentic RAG & Features Overview](#-agentic-rag--features-overview)
-8. [Configuration Environment Reference](#-configuration-environment-reference)
-9. [Troubleshooting & Maintenance](#-troubleshooting--maintenance)
+Built with **FastAPI · FAISS · Sentence-Transformers · SQLite · Ollama · React (Vite)**.
 
 ---
 
-## 🚀 Key Features
+![The docSeek workspace: sources, a cited answer, and the live agent trace](docs/images/workspace_chat.jpg)
 
-*   **Agentic Retrieval Loop (LangGraph):** A local LLM agent orchestrated as a LangGraph `StateGraph` dynamically plans each query (rewriting, decomposition), decides whether to rerank, grades retrieved evidence, and re-loops with reformulated queries when evidence is weak (Corrective RAG).
-*   **Multi-Notebook isolation:** Organize your document database into isolated "notebooks." Each notebook retains its own sqlite database, FAISS index, and upload directory.
-*   **Hybrid Search with RRF:** Combines dense vectors (FAISS, `all-mpnet-base-v2`) with keyword search (SQLite FTS5) using Reciprocal Rank Fusion (RRF) for robust search matches.
-*   **Local Cross-Encoder Reranking:** Re-scores candidates using `ms-marco-MiniLM-L-6-v2` on-device when precision is critical.
-*   **OCR PDF Fallback:** Ingests scan-only or image-based PDFs using an on-device Tesseract OCR engine fallback.
-*   **Smart Ingestion Chunking:** Choose between `recursive` character boundaries, `semantic` topic-shift embeddings, or `auto` profiling (which chooses strategies per document based on file contents).
-*   **Local Dictation:** In-browser microphone support records audio and transcribes it on-device using `faster-whisper` (`POST /transcribe`).
-*   **Audio Podcasts & TTS:** Generates two-host discussions or read-aloud versions of sources and answers using Kokoro TTS (`POST /podcast`).
-*   **Deep Research Reports:** Writes detailed, cited reports using multi-section planning and streaming generation (`POST /research`).
+<p align="center"><em>Ask a question and watch the local agent plan → retrieve → rerank → grade, then answer with clickable citations.</em></p>
 
 ---
 
-## 📸 Screenshots
+## Table of Contents
 
-### Notebooks Selection Dashboard
-Displays all your local, isolated document databases with metadata.
-![Notebooks Selection Dashboard](docs/images/notebooks_dashboard.jpg)
-
-### Three-Panel Workspace View
-A side-by-side interface for checking sources, discussing with the AI assistant featuring inline citations, and keeping notes.
-![Three-Panel Workspace View](docs/images/workspace_chat.jpg)
+- [What you can do](#what-you-can-do)
+- [Quick Start (the easy way)](#quick-start-the-easy-way)
+- [Manual Setup (step by step)](#manual-setup-step-by-step)
+- [Using docSeek](#using-docseek)
+- [How it works](#how-it-works)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [Project structure](#project-structure)
 
 ---
 
-## ⚙️ System Architecture
+## What you can do
+
+- 🔒 **Stay 100% local & private.** No cloud, no API keys, no telemetry. Your documents never leave the machine.
+- 📚 **Organize work into notebooks.** Each notebook is a fully isolated corpus with its own database, vector index, and files — switch between projects without their contents ever mixing.
+- 🧠 **Ask with an agent, not just search.** A local LLM plans each query, rewrites unclear questions, retrieves, reranks, grades the evidence, and re-tries when it's not good enough (Corrective RAG).
+- 🔎 **Hybrid retrieval.** Dense vectors (FAISS) fused with keyword search (SQLite FTS5) via Reciprocal Rank Fusion, with optional local cross-encoder reranking.
+- 📄 **Ingest almost anything.** `.txt`, `.md`, `.html`, `.docx`, `.pdf` (with on-device OCR fallback for scanned PDFs), `.pptx`, pasted text, whole GitHub repos, or web pages.
+- 🎙️ **Talk and listen.** Dictate questions with your mic (local Whisper), have answers read aloud, or generate a two-host **audio overview** of your sources (local Kokoro TTS).
+- 📝 **Go deep.** Stream multi-section, cited **research reports** across your sources.
+
+![The notebooks dashboard](docs/images/notebooks_dashboard.jpg)
+
+<p align="center"><em>Every project lives in its own isolated notebook.</em></p>
+
+---
+
+## Quick Start (the easy way)
+
+**Prerequisites** (install these first):
+
+| Need | Why | Install |
+| :--- | :--- | :--- |
+| **Python 3.10+** | Backend | [python.org](https://www.python.org/) |
+| **Node.js 18+** | Frontend | [nodejs.org](https://nodejs.org/) |
+| **Ollama** | Local LLM for agentic answers | [ollama.com](https://ollama.com) |
+| tesseract, espeak-ng, ffmpeg | OCR + audio (optional) | `brew install tesseract espeak-ng ffmpeg` |
+
+**Then, from the project root:**
+
+```bash
+# 1. Install everything (Python + audio + frontend deps) in one command
+./setup.sh
+
+# 2. Pull the default local model
+ollama pull phi3:mini
+
+# 3. Launch docSeek (backend + frontend together)
+./run.sh
+```
+
+Open **[http://localhost:5173](http://localhost:5173)** and you're in. 🎉
+
+> `setup.sh` is idempotent and only tells you what's missing — it won't overwrite anything or fail on optional pieces.
+
+---
+
+## Manual Setup (step by step)
+
+Prefer to run each step yourself? Here's exactly what `setup.sh` does.
+
+**1. System dependencies** (for scanned-PDF OCR and audio phonemization):
+
+```bash
+# macOS (Homebrew)
+brew install tesseract espeak-ng ffmpeg
+
+# Debian / Ubuntu
+sudo apt-get update && sudo apt-get install -y tesseract-ocr espeak-ng ffmpeg
+```
+
+**2. Python environment:**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+**3. Local audio / TTS stack** (Kokoro needs special dependency handling — see the script's comments):
+
+```bash
+./scripts/install_audio.sh
+```
+
+**4. Frontend dependencies:**
+
+```bash
+cd frontend && npm install && cd ..
+```
+
+**5. Ollama** (the local LLM that powers the agent):
+
+```bash
+# Install Ollama from https://ollama.com and start it, then:
+ollama pull phi3:mini          # default, fast
+ollama pull qwen2.5:7b         # optional, stronger — better research reports & podcasts
+```
+
+**6. Run it:**
+
+```bash
+./run.sh            # backend + frontend
+# or backend only:
+./run_server.sh
+```
+
+| Service | URL |
+| :--- | :--- |
+| Web app | http://localhost:5173 |
+| Backend API | http://localhost:8000 |
+| Interactive API docs (Swagger) | http://localhost:8000/docs |
+
+> **No Ollama?** docSeek still runs — it gracefully degrades to plain hybrid search and skips the agent's LLM steps. Podcasts and research reports need the LLM.
+
+### Hardware notes
+
+- **OS:** macOS (Apple Silicon recommended) or Linux (Ubuntu/Debian).
+- **RAM:** 8 GB minimum, 16 GB+ recommended (embedder + cross-encoder + Ollama together).
+- **Disk:** ~5 GB for cached model weights (HuggingFace + Ollama).
+
+---
+
+## Using docSeek
+
+1. **Create a notebook** from the dashboard (`+ New notebook`) and open it.
+2. **Add sources** with `+ Add` — drag in files, paste text, or ingest a GitHub repo. Uploads process in the background; you'll see them appear in the Sources panel.
+3. **Ask.** Type in the bar at the bottom and pick a mode:
+   - **Ask** — the full agentic loop with inline citations.
+   - **Search** — raw hybrid retrieval, ranked results.
+   - **Research** — a long, multi-section cited report.
+4. **Scope retrieval** by checking/unchecking sources in the left panel.
+5. **Do more in the Studio panel** (right): take notes, generate an audio overview, or inspect engine stats.
+
+**Bulk ingest from the CLI** (each notebook is isolated, so pass its id):
+
+```bash
+python -m app.ingest --notebook <notebook-id> ./docs "**/*.md"
+python -m app.ingest --notebook <notebook-id> --url https://example.com/page
+```
+
+---
+
+## How it works
+
+Each notebook is physically isolated on disk (`data/notebooks/<id>/` with its own SQLite DB, FAISS index, uploads, and audio). Every request is scoped to one notebook.
 
 ```mermaid
 graph TD
-    %% Ingestion Flow
     subgraph Ingestion Pipeline
-        Doc[Upload Documents] --> Detect{File Type}
-        Detect -->|PDF/Image| OCR{Scan Only?}
-        OCR -->|Yes| Tesseract[Tesseract OCR Fallback]
+        Doc[Upload / Paste / GitHub] --> Detect{File Type}
+        Detect -->|PDF/Image| OCR{Scanned?}
+        OCR -->|Yes| Tesseract[Tesseract OCR]
         OCR -->|No| PyPDF[PDF Text Extraction]
-        Detect -->|Markdown/HTML/Office| Parse[Text Extractors]
-        Tesseract & PyPDF & Parse --> Chunk{Chunking Strategy}
-        Chunk -->|Recursive| Rec[Recursive Splitting]
-        Chunk -->|Semantic| Sem[Semantic Topic-Shift Embedding]
-        Chunk -->|Auto| Aut[Auto-Profile Selection]
-        Rec & Sem & Aut --> Ingest[Save Ingestion]
-        Ingest --> SQLite[(SQLite FTS5 Text DB)]
-        Ingest --> FAISS[(FAISS Vector Index)]
+        Detect -->|MD/HTML/Office| Parse[Text Extractors]
+        Tesseract & PyPDF & Parse --> Chunk{Chunking}
+        Chunk -->|recursive / semantic / auto| Embed[Embed chunks]
+        Embed --> SQLite[(SQLite + FTS5)]
+        Embed --> FAISS[(FAISS Index)]
     end
 
-    %% Query Flow
-    subgraph Query Execution Pipeline
-        QueryInput[User Query] --> AskMode{Query Type}
-        AskMode -->|Plain Search| Search[Hybrid Search: FTS5 + FAISS]
-        AskMode -->|Agentic Ask| LangGraph[LangGraph Agent Loop]
-        
-        LangGraph --> Plan[Plan Query & Dynamic K]
-        Plan --> Search
-        Search --> RRF[Reciprocal Rank Fusion]
-        RRF --> RerankCheck{Agent Needs Rerank?}
-        RerankCheck -->|Yes| CrossEncoder[Local Cross-Encoder Reranker]
-        RerankCheck -->|No| Grade[Grade Evidence Quality]
-        CrossEncoder --> Grade
-        
-        Grade --> Confidence{Good Quality?}
-        Confidence -->|No & Retries Left| Rewrite[Query Rewriter]
-        Rewrite --> Search
-        Confidence -->|Yes / Max Loops| Generate[Synthesize Answer]
-        Generate --> LLM[Local LLM via Ollama]
-        LLM --> Stream[Stream SSE Response]
+    subgraph Query Pipeline
+        Q[User Query] --> Mode{Mode}
+        Mode -->|Search| Hybrid[Hybrid Search: FTS5 + FAISS]
+        Mode -->|Ask| Agent[LangGraph Agent]
+        Agent --> Plan[Plan query & dynamic k]
+        Plan --> Hybrid
+        Hybrid --> RRF[Reciprocal Rank Fusion]
+        RRF --> Rerank{Rerank?}
+        Rerank -->|Yes| Cross[Local Cross-Encoder]
+        Rerank -->|No| Grade[Grade evidence]
+        Cross --> Grade
+        Grade -->|Weak & retries left| Rewrite[Rewrite query] --> Hybrid
+        Grade -->|Good / max loops| Gen[Synthesize answer]
+        Gen --> LLM[Local LLM via Ollama]
+        LLM --> Stream[Stream SSE + citations]
     end
-    
-    style Ingestion Pipeline fill:#1a1b26,stroke:#7aa2f7,stroke-width:2px;
-    style Query Execution Pipeline fill:#1a1b26,stroke:#bb9af7,stroke-width:2px;
+
     style SQLite fill:#2ac3de,stroke:#3d59a1
     style FAISS fill:#2ac3de,stroke:#3d59a1
     style LLM fill:#e0af68,stroke:#ff9e64
 ```
 
+**Models (all local):** embeddings `all-mpnet-base-v2` (768-dim) · reranking `ms-marco-MiniLM-L-6-v2` · dictation `faster-whisper` · TTS `Kokoro-82M` · reasoning via Ollama (`phi3:mini` by default).
+
 ---
 
-## 📂 Project Structure
+## Configuration
+
+Set via environment variables (or edit `app/core/config.py`):
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `DOCSEEK_PORT` | `8000` | Backend port. |
+| `DOCSEEK_LLM_MODEL` | `phi3:mini` | Ollama model for the agent and generation. |
+| `DOCSEEK_LLM_BASE_URL` | `http://localhost:11434/v1` | Ollama endpoint. |
+| `DOCSEEK_STT_MODEL` | `small` | faster-whisper size (`tiny`/`base`/`small`/`medium`). |
+| `DOCSEEK_TTS_VOICE_A` / `_B` | `af_heart` / `am_michael` | The two podcast host voices. |
+| `CORS_ORIGINS` | `localhost:5173,localhost:3000` | Allowed web origins. |
+| `ADMIN_TOKEN` | *(unset)* | Set a token to gate destructive endpoints (`/reset`, `/rebuild`, deletes). |
+
+---
+
+## Troubleshooting
+
+- **Answers are generic / no citations.** Ollama isn't running or the model isn't pulled. Start Ollama and run `ollama pull phi3:mini`. docSeek falls back to plain hybrid search when the LLM is unreachable.
+- **First query is slow.** Models load lazily on first use (embedder, reranker, Whisper, Kokoro download once). Subsequent runs are fast.
+- **Scanned PDF won't ingest.** Install `tesseract` (OCR). Without it, image-only PDFs are skipped cleanly rather than crashing.
+- **Podcast/TTS fails.** Run `./scripts/install_audio.sh` and install `espeak-ng`.
+- **Reset a notebook.** In Settings, or `curl -X DELETE "http://localhost:8000/reset?notebook_id=<id>"`. To wipe everything, delete the `data/` folder.
+- **Regenerate the README screenshots** (needs Ollama running): `cd frontend && npm run screenshots` — it captures the real app into `docs/images/`.
+
+---
+
+## Project structure
 
 ```text
 .
 ├── app/
-│   ├── core/           # Core Engines & Helpers
-│   │   ├── config.py   # System settings, models, paths
-│   │   ├── database.py # SQLite schema, connections, and CRUD
-│   │   └── engine.py   # Embedding generation & FAISS logic
-│   ├── server.py       # FastAPI application endpoints & SSE
-│   └── ingest.py       # CLI command tool for ingestion
-├── data/               # Persistent data folder (ignored by Git)
-│   └── notebooks/      # Isolated multi-notebook databases
-│       └── <notebook_id>/
-│           ├── docs.db        # Metadata & full text database
-│           ├── my_index.faiss # FAISS vector index
-│           └── uploads/       # Copy of uploaded raw documents
-├── frontend/           # Vite + React User Interface
-├── scripts/            # Shell scripts
-│   └── install_audio.sh # Audio TTS stack bootstrap
-├── run.sh              # Unified dev runner (Frontend + Backend)
-├── run_server.sh       # Backend-only runner
-└── requirements.txt    # Base Python dependencies
+│   ├── core/            # Engines & helpers
+│   │   ├── config.py    # Settings, models, per-notebook path resolvers
+│   │   ├── notebooks.py # Notebook registry (create/list/delete)
+│   │   ├── database.py  # SQLite schema + queries (per notebook)
+│   │   ├── engine.py    # Embeddings + FAISS index
+│   │   ├── agent.py     # LangGraph agentic retrieval loop
+│   │   ├── podcast.py   # Audio overview graph
+│   │   └── research.py  # Deep-research graph
+│   ├── server.py        # FastAPI endpoints + SSE
+│   └── ingest.py        # CLI bulk ingestion
+├── data/                # Persistent state (gitignored)
+│   ├── notebooks.json   # Notebook registry
+│   └── notebooks/<id>/  # Isolated per notebook:
+│       ├── docs.db          #   SQLite + full text
+│       ├── my_index.faiss   #   FAISS vectors
+│       ├── uploads/         #   raw files
+│       └── audio/           #   generated audio
+├── frontend/            # React + Vite UI
+├── scripts/             # install_audio.sh, screenshots, debug tools
+├── setup.sh             # One-command setup
+├── run.sh               # Run backend + frontend
+└── requirements.txt     # Backend dependencies
 ```
 
 ---
 
-## 💻 Hardware & OS Requirements
-
-- **OS:** macOS (Apple Silicon highly recommended), Linux (Ubuntu/Debian supported).
-- **RAM:** Minimum 8GB (16GB+ recommended to run Embedding models + Cross-Encoder + Ollama concurrently).
-- **Disk Space:** ~5GB for local model checkpoints (HuggingFace cache + Ollama models).
-
----
-
-## 🛠️ Step-by-Step Installation
-
-### Step 1: Install System Dependencies
-docSeek requires some external binaries for scanned PDF processing (OCR) and text-to-speech audio phonemization:
-
-- **macOS (via Homebrew):**
-  ```bash
-  brew install tesseract espeak-ng ffmpeg
-  ```
-- **Linux (Debian/Ubuntu):**
-  ```bash
-  sudo apt-get update
-  sudo apt-get install -y tesseract-ocr espeak-ng ffmpeg
-  ```
-
-### Step 2: Set up Virtual Environment
-Navigate to the repository root directory and construct a Python 3.10+ virtual environment:
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### Step 3: Install Core Python Packages
-Upgrade pip and install the core backend package stack:
-```bash
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### Step 4: Install the Audio & TTS Stack
-Because the Kokoro TTS package requires strict dependency overrides to avoid conflict with the numpy 2.x system, you must run the standalone installer:
-```bash
-chmod +x scripts/install_audio.sh
-./scripts/install_audio.sh
-```
-
-### Step 5: Install & Configure Ollama
-Ollama orchestrates the local LLM agent.
-1. Download Ollama from [ollama.com](https://ollama.com).
-2. Start the Ollama application.
-3. Download the default model (`phi3:mini`) and a stronger recommendation for Deep Research (`qwen2.5:7b` or `llama3.1`):
-   ```bash
-   ollama pull phi3:mini
-   ollama pull qwen2.5:7b
-   ```
-
----
-
-## 🏁 Quickstart & Usage Guide
-
-### 1. Launching docSeek
-To boot both the FastAPI backend and the Vite frontend simultaneously:
-```bash
-./run.sh
-```
-*   **Web Frontend:** [http://localhost:5173](http://localhost:5173) or [http://localhost:3000](http://localhost:3000)
-*   **FastAPI backend:** [http://localhost:8000](http://localhost:8000)
-*   **Interactive Swagger API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
-
-To run the backend only:
-```bash
-./run_server.sh
-```
-
-### 2. Ingesting Files (CLI)
-You can ingest folders of documents recursively. You must specify the **notebook ID** to keep your data isolated:
-
-```bash
-# Ingest markdown files into the 'my-first-workspace' notebook
-python -m app.ingest --notebook my-first-workspace ./docs "**/*.md"
-```
-
----
-
-## 💡 Agentic RAG & Features Overview
-
-### `/ask` vs `/search`
-- **`/search` (Hybrid Retrieval):** Searches SQLite BM25 + FAISS Dense Vector indexes. Returns a fused RRF ranking with cross-encoder reranking.
-- **`/ask` (Agentic RAG):** Starts a LangGraph loops system. The LLM acts as an agent to rewrite poorly formatted questions, fetches documents, grades retrieved chunks, and loops back to query different angles if confidence is low.
-
-### Local Voice Dictation
-Click the microphone icon in the UI. The application records audio locally and calls `POST /transcribe`. The server runs `faster-whisper` on-device to transcribe audio to text instantly, sending it to the chat input field.
-
-### Audio Podcasts & TTS
-In the Studio tab of the UI:
-1. Select the ingested files you want.
-2. Click **Generate Podcast**.
-3. The server uses Ollama to draft a script, and Kokoro TTS reads it with two distinct local voices (`af_heart` and `am_michael`), outputting a fully local `.wav` audio.
-
----
-
-## 🔧 Configuration Environment Reference
-
-You can customize docSeek variables using environment variables or editing [config.py](file:///Users/dan/projects/standalone/docSeek---Modular-RAG-system-/app/core/config.py):
-
-| Env Variable | Default | Purpose |
-| :--- | :--- | :--- |
-| `DOCSEEK_PORT` | `8000` | Bind port for FastAPI. |
-| `DOCSEEK_LLM_MODEL` | `phi3:mini` | Ollama model name used for agent loops and text synthesis. |
-| `DOCSEEK_LLM_BASE_URL` | `http://localhost:11434/v1` | URL for Ollama client. |
-| `DOCSEEK_STT_MODEL` | `small` | faster-whisper size model (`tiny`, `base`, `small`, `medium`). |
-| `DOCSEEK_TTS_VOICE_A` | `af_heart` | First host's voice for Kokoro TTS. |
-| `DOCSEEK_TTS_VOICE_B` | `am_michael` | Second host's voice for Kokoro TTS. |
-| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Allowed web origins. |
-| `ADMIN_TOKEN` | `None` | Set to a token string to secure destructive endpoints (like `/reset`). |
-
----
-
-## 🧹 Troubleshooting & Maintenance
-
-### Graceful Degradation
-If Ollama is not active or unreachable, docSeek will automatically degrade to heuristic parameters and fall back to classic hybrid retrieval without crashing, meaning search queries and index uploads will still function.
-
-### Database Reset
-To clear all databases and index binaries, call the reset endpoint:
-```bash
-curl -X DELETE "http://localhost:8000/reset"
-```
-*(Or delete the folder `data/` manually).*
+<p align="center"><sub>Everything local. Nothing leaves your machine.</sub></p>
