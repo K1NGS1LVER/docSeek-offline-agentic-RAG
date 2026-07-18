@@ -44,6 +44,14 @@ export function SystemProvider({ notebookId, children }) {
   const [uploads, setUploads] = useState([]);
   const uploadSeq = useRef(0);
   const pumpingRef = useRef(false);
+  // Always points at the currently active notebook, so an upload pool started
+  // before a notebook switch never refreshes the newly-selected notebook with
+  // the old notebook's sources (its refreshSources closure is bound to the old
+  // notebook).
+  const notebookIdRef = useRef(notebookId);
+  useEffect(() => {
+    notebookIdRef.current = notebookId;
+  }, [notebookId]);
 
   const addLog = useCallback((msg, level = 'INFO') => {
     const ts = new Date().toLocaleTimeString('en-US', { hour12: false });
@@ -181,8 +189,13 @@ export function SystemProvider({ notebookId, children }) {
           );
           updateUpload(item.id, { status: 'done', chunks: data.chunks, sourceFile: data.filename });
           addLog(`Indexed ${item.filename}: ${data.chunks} chunks in ${data.time_seconds}s`);
-          refreshSources();
-          refreshStats();
+          // Only refresh when this upload's notebook is still the active one, so
+          // a completion arriving after a notebook switch can't overwrite the
+          // new notebook's sidebar with this one's sources.
+          if (item.notebookId === notebookIdRef.current) {
+            refreshSources();
+            refreshStats();
+          }
         } catch (e) {
           updateUpload(item.id, { status: 'error', error: e.message });
           addLog(`Failed ${item.filename}: ${e.message}`, 'ERROR');

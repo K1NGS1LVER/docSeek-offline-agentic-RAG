@@ -74,6 +74,7 @@ export default function AddSourcesModal({ onClose }) {
     refreshSources,
     refreshStats,
     refreshIngestStatus,
+    addLog,
     uploads,
     enqueueUploads,
     startUploads,
@@ -96,13 +97,15 @@ export default function AddSourcesModal({ onClose }) {
     const name = pasteName.trim() || `pasted-${new Date().toISOString().slice(0, 10)}.txt`;
     try {
       await ingestText(notebookId, pasteText.trim(), JSON.stringify({ filename: name, source_file: name }));
+      addLog(`Ingested pasted text as ${name}`);
       refreshSources();
       refreshStats();
       setPasteText('');
       setPasteName('');
       setPanel(null);
-    } catch {
-      // Non-fatal here; keep inputs so user can retry
+    } catch (e) {
+      // Non-fatal here; keep inputs so user can retry.
+      addLog(`Paste ingest failed: ${e.message}`, 'ERROR');
     }
     setPasting(false);
   };
@@ -111,13 +114,15 @@ export default function AddSourcesModal({ onClose }) {
     if (!ghUrl.trim()) return;
     try {
       await ingestGithub(notebookId, ghUrl.trim(), ghSub.trim() || null);
+      addLog(`GitHub ingestion started: ${ghUrl}`);
       setGhUrl('');
       setGhSub('');
       setPanel(null);
       refreshIngestStatus();
       onClose();
-    } catch {
-      // Non-fatal here; keep inputs so user can retry
+    } catch (e) {
+      // Non-fatal here; keep inputs so user can retry.
+      addLog(`GitHub ingest failed: ${e.message}`, 'ERROR');
     }
   };
 
