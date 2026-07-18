@@ -341,7 +341,7 @@ function messagesToMarkdown(messages) {
       if (m.sources?.length) {
         lines.push('**Sources:**');
         m.sources.forEach((s, i) => {
-          lines.push(`${i + 1}. ${s.metadata?.filename || s.source_file || 'source'}`);
+          lines.push(`${i + 1}. ${s.source?.filename || s.source_file || 'source'}`);
         });
         lines.push('');
       }
