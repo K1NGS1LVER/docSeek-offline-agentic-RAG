@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download, Copy, Check } from 'lucide-react';
+import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download, Copy, Check, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { search, ask, research, transcribe, streamSpeech, synthesizeSpeech, getDocumentViewUrl } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
-import { Segmented, Chip } from './ui';
+import { Segmented, Chip, IconButton } from './ui';
+import ClearChatModal from './ClearChatModal';
 
 const CHAT_KEY = (id) => `ds_chat_${id}`;
 
@@ -327,6 +328,41 @@ function downloadMarkdown(title, text) {
   URL.revokeObjectURL(url);
 }
 
+/* Render the full message thread to Markdown for the clear-chat transcript
+   download. Robust to missing fields — each message type degrades to a
+   plain line rather than throwing. */
+function messagesToMarkdown(messages) {
+  const lines = ['# Chat transcript', ''];
+  for (const m of messages) {
+    if (m.type === 'query') {
+      lines.push(`## Q: ${m.text || ''}`, '');
+    } else if (m.type === 'answer') {
+      lines.push(m.text || '_(no answer)_', '');
+      if (m.sources?.length) {
+        lines.push('**Sources:**');
+        m.sources.forEach((s, i) => {
+          lines.push(`${i + 1}. ${s.metadata?.filename || s.source_file || 'source'}`);
+        });
+        lines.push('');
+      }
+    } else if (m.type === 'result') {
+      const results = m.results || [];
+      if (results.length === 0) {
+        lines.push('_(no results)_', '');
+      } else {
+        lines.push(`**${results.length} result${results.length !== 1 ? 's' : ''}:**`);
+        results.forEach((r, i) => {
+          lines.push(`${i + 1}. ${r.source?.filename || r.metadata?.filename || 'source'}`);
+        });
+        lines.push('');
+      }
+    } else if (m.type === 'error') {
+      lines.push(`> Error: ${m.text || 'unknown error'}`, '');
+    }
+  }
+  return lines.join('\n');
+}
+
 /* ── Markdown with [n] rendered as citation chips ──── */
 function AnswerMarkdown({ text, sources }) {
   const { notebookId } = useParams();
@@ -489,6 +525,7 @@ export default function ChatPanel({
   const [topK, setTopK] = useState('auto');
   const [mode, setMode] = useState('ask');
   const [micError, setMicError] = useState('');
+  const [clearOpen, setClearOpen] = useState(false);
   const endRef = useRef(null);
   const nextIdRef = useRef(1);
   const questionsRef = useRef([]);
@@ -720,10 +757,28 @@ export default function ChatPanel({
     }
   };
 
+  // Clears this notebook's thread: skip the persist effect's next run (fired
+  // by the setMessages([]) below) so it doesn't immediately re-create the
+  // localStorage key we're about to remove as "[]".
+  const clearChat = () => {
+    skipPersistRef.current = true;
+    setMessages([]);
+    questionsRef.current = [];
+    onQuestionsChange?.([]);
+    nextIdRef.current = 1;
+    if (chatKeyRef.current) localStorage.removeItem(chatKeyRef.current);
+    setClearOpen(false);
+  };
+
   const canType = selectedCount > 0;
 
   return (
     <section className="flex-1 min-w-0 flex flex-col">
+      {messages.length > 0 && (
+        <div className="flex-shrink-0 flex items-center justify-end px-6 pt-4">
+          <IconButton icon={Trash2} onClick={() => setClearOpen(true)} title="Clear chat" />
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto px-6 pt-8 pb-4">
         <div className="max-w-3xl mx-auto flex flex-col gap-6 min-h-full">
           {messages.length === 0 && (
@@ -938,6 +993,14 @@ export default function ChatPanel({
           </p>
         )}
       </div>
+
+      {clearOpen && (
+        <ClearChatModal
+          onDownload={() => downloadMarkdown('chat-transcript', messagesToMarkdown(messages))}
+          onConfirm={clearChat}
+          onClose={() => setClearOpen(false)}
+        />
+      )}
     </section>
   );
 }
