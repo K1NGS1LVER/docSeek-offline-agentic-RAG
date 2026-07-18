@@ -376,7 +376,7 @@ async def patch_notebook(nb_id: str, body: NotebookUpdate):
 
 
 @app.delete("/notebooks/{nb_id}")
-async def del_notebook(nb_id: str):
+async def del_notebook(nb_id: str, _: None = Depends(require_admin)):
     if not notebooks.delete_notebook(nb_id):
         raise HTTPException(status_code=404, detail="Notebook not found")
     with _runtimes_lock:
@@ -968,6 +968,8 @@ def podcast_status(job_id: str = Query(...), notebook_id: str = Query(...)):
 @app.get("/podcast/audio")
 def podcast_audio(job_id: str = Query(...), notebook_id: str = Query(...)):
     """Serve the generated WAV for a completed episode."""
+    if notebooks.get_notebook(notebook_id) is None:
+        raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
     wav = audio_dir(notebook_id) / f"{job_id}.wav"
     if not wav.exists():
         raise HTTPException(status_code=404, detail="Audio not found for this job")
@@ -977,6 +979,8 @@ def podcast_audio(job_id: str = Query(...), notebook_id: str = Query(...)):
 @app.get("/podcasts")
 def list_podcasts(notebook_id: str = Query(...)):
     """All generated episodes for this notebook, newest first."""
+    if notebooks.get_notebook(notebook_id) is None:
+        raise HTTPException(status_code=404, detail=f"Notebook '{notebook_id}' not found")
     return podcast.list_episodes(audio_dir(notebook_id))
 
 
@@ -1233,7 +1237,6 @@ def _github_ingest_worker(notebook_id: str, repo_url: str, subpath: Optional[str
     import re as re_module
 
     global github_ingest_status
-    rt = get_runtime(notebook_id)
     github_ingest_status = {
         "is_ingesting": True,
         "current_file": "",
@@ -1245,6 +1248,8 @@ def _github_ingest_worker(notebook_id: str, repo_url: str, subpath: Optional[str
     }
 
     try:
+        rt = get_runtime(notebook_id)
+
         # Clone the repo into a temp directory
         tmpdir = tempfile.mkdtemp(prefix="docseek_github_")
         logger.info(f"Cloning {repo_url} into {tmpdir}")
