@@ -499,6 +499,14 @@ export default function ChatPanel({
   // the old notebook's messages to the new key (see report for the full
   // switch sequence).
   const chatKeyRef = useRef(null);
+  // Skips the persist effect run that fires immediately after a load, so the
+  // still-stale `messages` from the previous render (or the initial `[]` on
+  // mount) never gets written over the thread the load effect just set.
+  const skipPersistRef = useRef(true);
+  // Monotonic token invalidating in-flight ask/search/research requests when
+  // the notebook changes mid-stream, so a stale response can never mutate or
+  // persist another notebook's thread.
+  const reqSeqRef = useRef(0);
 
   // Load (or swap) this notebook's chat thread whenever notebookId changes,
   // including on mount.
@@ -511,7 +519,9 @@ export default function ChatPanel({
       loaded = [];
     }
 
+    reqSeqRef.current += 1;
     chatKeyRef.current = CHAT_KEY(notebookId);
+    skipPersistRef.current = true;
     setMessages(loaded);
 
     questionsRef.current = loaded.filter((m) => m.type === 'query').map((m) => ({ id: m.id, text: m.text }));
@@ -528,6 +538,10 @@ export default function ChatPanel({
   // dependency here so a notebook switch cannot write stale messages under
   // the new key.
   useEffect(() => {
+    if (skipPersistRef.current) {
+      skipPersistRef.current = false;
+      return;
+    }
     if (messages.some((m) => m.isStreaming)) return;
     if (chatKeyRef.current) localStorage.setItem(chatKeyRef.current, JSON.stringify(messages));
   }, [messages]);
@@ -560,6 +574,7 @@ export default function ChatPanel({
   };
 
   const performSearch = async (query) => {
+    const myReq = (reqSeqRef.current += 1);
     const k = topK === 'auto' ? 5 : topK;
     const qId = nextIdRef.current++;
     setMessages((prev) => [...prev, { type: 'query', id: qId, text: query, ts: Date.now() }]);
@@ -570,16 +585,20 @@ export default function ChatPanel({
 
     try {
       const { data, latency } = await search(notebookId, query, k, false, sourceFilter);
-      setMessages((prev) => [
-        ...prev,
-        { type: 'result', id: nextIdRef.current++, results: data, latency, query, ts: Date.now() },
-      ]);
+      if (reqSeqRef.current === myReq) {
+        setMessages((prev) => [
+          ...prev,
+          { type: 'result', id: nextIdRef.current++, results: data, latency, query, ts: Date.now() },
+        ]);
+      }
       addLog(`Results: ${data.length} chunks in ${latency}ms`);
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { type: 'error', id: nextIdRef.current++, text: err.message, ts: Date.now() },
-      ]);
+      if (reqSeqRef.current === myReq) {
+        setMessages((prev) => [
+          ...prev,
+          { type: 'error', id: nextIdRef.current++, text: err.message, ts: Date.now() },
+        ]);
+      }
       addLog(`Search error: ${err.message}`, 'ERROR');
     } finally {
       setIsSearching(false);
@@ -587,6 +606,7 @@ export default function ChatPanel({
   };
 
   const handleAsk = async (query) => {
+    const myReq = (reqSeqRef.current += 1);
     const qId = nextIdRef.current++;
     setMessages((prev) => [...prev, { type: 'query', id: qId, text: query, ts: Date.now() }]);
     addQuestion(qId, query);
@@ -603,6 +623,7 @@ export default function ChatPanel({
     ]);
 
     const updateLast = (patch) => {
+      if (reqSeqRef.current !== myReq) return;
       setMessages((prev) => {
         const updated = [...prev];
         const lastIdx = updated.length - 1;
@@ -631,10 +652,12 @@ export default function ChatPanel({
       updateLast(() => ({ text: data, isStreaming: false, latency }));
       addLog(`Answered in ${latency}ms`);
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { type: 'error', id: nextIdRef.current++, text: err.message, ts: Date.now() },
-      ]);
+      if (reqSeqRef.current === myReq) {
+        setMessages((prev) => [
+          ...prev,
+          { type: 'error', id: nextIdRef.current++, text: err.message, ts: Date.now() },
+        ]);
+      }
       addLog(`Ask error: ${err.message}`, 'ERROR');
     } finally {
       setIsSearching(false);
@@ -642,6 +665,7 @@ export default function ChatPanel({
   };
 
   const handleResearch = async (query) => {
+    const myReq = (reqSeqRef.current += 1);
     const qId = nextIdRef.current++;
     setMessages((prev) => [...prev, { type: 'query', id: qId, text: query, ts: Date.now() }]);
     addQuestion(qId, query);
@@ -658,6 +682,7 @@ export default function ChatPanel({
     ]);
 
     const updateLast = (patch) => {
+      if (reqSeqRef.current !== myReq) return;
       setMessages((prev) => {
         const updated = [...prev];
         const lastIdx = updated.length - 1;
@@ -683,10 +708,12 @@ export default function ChatPanel({
       updateLast(() => ({ text: data, isStreaming: false, latency }));
       addLog(`Report ready in ${latency}ms`);
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { type: 'error', id: nextIdRef.current++, text: err.message, ts: Date.now() },
-      ]);
+      if (reqSeqRef.current === myReq) {
+        setMessages((prev) => [
+          ...prev,
+          { type: 'error', id: nextIdRef.current++, text: err.message, ts: Date.now() },
+        ]);
+      }
       addLog(`Research error: ${err.message}`, 'ERROR');
     } finally {
       setIsSearching(false);
