@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download, Copy, Check } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { search, ask, research, transcribe, streamSpeech, synthesizeSpeech, getDocumentViewUrl } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
 import { Segmented, Chip } from './ui';
+
+const CHAT_KEY = (id) => `ds_chat_${id}`;
 
 const TTS_SAMPLE_RATE = 24000;
 
@@ -326,6 +329,7 @@ function downloadMarkdown(title, text) {
 
 /* ── Markdown with [n] rendered as citation chips ──── */
 function AnswerMarkdown({ text, sources }) {
+  const { notebookId } = useParams();
   // Bare [n] markers (not markdown links) become internal #cite-n links,
   // then the link renderer turns those into citation chips.
   const processed = useMemo(
@@ -345,7 +349,7 @@ function AnswerMarkdown({ text, sources }) {
               <a
                 className="citation-chip"
                 style={{ textDecoration: 'none' }}
-                href={getDocumentViewUrl(src.id)}
+                href={getDocumentViewUrl(notebookId, src.id)}
                 target="_blank"
                 rel="noopener noreferrer"
                 title={src.source?.filename || `chunk #${src.id}`}
@@ -369,13 +373,14 @@ function AnswerMarkdown({ text, sources }) {
 
 /* ── Numbered source chips under an answer ─────────── */
 function SourcesRow({ sources }) {
+  const { notebookId } = useParams();
   if (!sources || sources.length === 0) return null;
   return (
     <>
       {sources.map((s, i) => (
         <a
           key={i}
-          href={getDocumentViewUrl(s.id)}
+          href={getDocumentViewUrl(notebookId, s.id)}
           target="_blank"
           rel="noopener noreferrer"
           title={s.content?.slice(0, 300)}
@@ -417,6 +422,7 @@ function CollapsibleSources({ sources }) {
 
 /* ── Search result card ────────────────────────────── */
 function ResultCard({ result, index }) {
+  const { notebookId } = useParams();
   const pct = Math.round(Math.min(Math.max(result.score, 0), 1) * 100);
   return (
     <motion.div
@@ -433,7 +439,7 @@ function ResultCard({ result, index }) {
           <span className="font-mono text-2xs text-accent">{pct}%</span>
         </div>
         <a
-          href={getDocumentViewUrl(result.id)}
+          href={getDocumentViewUrl(notebookId, result.id)}
           target="_blank"
           rel="noopener noreferrer"
           className="font-mono text-2xs text-text-muted hover:text-accent transition-colors"
@@ -475,6 +481,7 @@ export default function ChatPanel({
   onSaveNote,
   onQuestionsChange,
 }) {
+  const { notebookId } = useParams();
   const { addLog } = useSystem();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -485,6 +492,45 @@ export default function ChatPanel({
   const endRef = useRef(null);
   const nextIdRef = useRef(1);
   const questionsRef = useRef([]);
+  // Tracks the localStorage key the persist effect below should write to.
+  // Set (together with setMessages) by the load effect whenever notebookId
+  // changes, so the persist effect — keyed only on `messages` — always
+  // writes the new notebook's messages to the new notebook's key, never
+  // the old notebook's messages to the new key (see report for the full
+  // switch sequence).
+  const chatKeyRef = useRef(null);
+
+  // Load (or swap) this notebook's chat thread whenever notebookId changes,
+  // including on mount.
+  useEffect(() => {
+    let loaded = [];
+    try {
+      const raw = JSON.parse(localStorage.getItem(CHAT_KEY(notebookId))) || [];
+      loaded = raw.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
+    } catch {
+      loaded = [];
+    }
+
+    chatKeyRef.current = CHAT_KEY(notebookId);
+    setMessages(loaded);
+
+    questionsRef.current = loaded.filter((m) => m.type === 'query').map((m) => ({ id: m.id, text: m.text }));
+    onQuestionsChange?.(questionsRef.current);
+
+    const maxId = loaded.reduce((max, m) => (m.id > max ? m.id : max), 0);
+    nextIdRef.current = maxId + 1;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onQuestionsChange is a stable callback from the parent; re-running on its identity change would re-load the thread unnecessarily.
+  }, [notebookId]);
+
+  // Persist the thread on every change, but never mid-stream (a reload
+  // should never resume showing a spinner) and always to the key recorded
+  // by the load effect above — notebookId itself is deliberately not a
+  // dependency here so a notebook switch cannot write stale messages under
+  // the new key.
+  useEffect(() => {
+    if (messages.some((m) => m.isStreaming)) return;
+    if (chatKeyRef.current) localStorage.setItem(chatKeyRef.current, JSON.stringify(messages));
+  }, [messages]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -523,7 +569,7 @@ export default function ChatPanel({
     addLog(`Query: "${query}" (k=${k})`);
 
     try {
-      const { data, latency } = await search(query, k, false, sourceFilter);
+      const { data, latency } = await search(notebookId, query, k, false, sourceFilter);
       setMessages((prev) => [
         ...prev,
         { type: 'result', id: nextIdRef.current++, results: data, latency, query, ts: Date.now() },
@@ -568,6 +614,7 @@ export default function ChatPanel({
     try {
       const k = topK === 'auto' ? null : topK;
       const { data, latency } = await ask(
+        notebookId,
         query,
         k,
         (chunk) => updateLast(() => ({ text: chunk, isStreaming: true })),
@@ -621,6 +668,7 @@ export default function ChatPanel({
 
     try {
       const { data, latency } = await research(
+        notebookId,
         query,
         (chunk) => updateLast(() => ({ text: chunk, isStreaming: true })),
         {
