@@ -106,6 +106,30 @@ def insert_document(db_path: str, content: str, metadata: Optional[str] = None) 
         conn.commit()
     return doc_id
 
+def insert_documents_batch(db_path: str, items: List[Dict[str, Any]]) -> List[int]:
+    """Insert multiple documents in a single transaction and return their IDs.
+    items should be dicts with 'content' and optional 'metadata'.
+    """
+    doc_ids = []
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        for item in items:
+            content = item["content"]
+            metadata = item.get("metadata")
+            source_file = None
+            if metadata:
+                try:
+                    source_file = json.loads(metadata).get("source_file")
+                except Exception:
+                    source_file = None
+            cursor.execute(
+                "INSERT INTO documents (content, metadata, source_file) VALUES (?, ?, ?)",
+                (content, metadata, source_file),
+            )
+            doc_ids.append(cursor.lastrowid)
+        conn.commit()
+    return doc_ids
+
 def fetch_documents_by_ids(db_path: str, doc_ids: List[int]) -> List[Dict[str, Any]]:
     """Fetch documents by their IDs"""
     if not doc_ids:
