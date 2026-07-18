@@ -13,6 +13,7 @@ from bs4 import BeautifulSoup
 import re
 import gc
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ============================================================================
 # CONFIGURATION
@@ -108,6 +109,13 @@ def ingest_text(text: str, metadata: str = None, notebook_id: str = None) -> dic
     )
     return response.json()
 
+def ingest_text_batch(batch_items: List[dict], notebook_id: str) -> dict:
+    response = requests.post(
+        f"{RAG_API_URL}/ingest/batch",
+        json={"notebook_id": notebook_id, "documents": batch_items},
+    )
+    return response.json()
+
 def ingest_file(filepath: str, notebook_id: str):
     print(f"Processing: {filepath}")
 
@@ -120,19 +128,22 @@ def ingest_file(filepath: str, notebook_id: str):
     elif ext in [".html", ".htm"]:
         content = read_html_file(filepath)
     else:
-        print(f"  ⚠️  Skipping unsupported file type: {ext}")
+        print(f"  ⚠️ Skipping unsupported file type: {ext}")
         return 0
 
     content = re.sub(r"\n{3,}", "\n\n", content).strip()
 
     if not content:
-        print(f"  ⚠️  Empty file, skipping")
+        print(f"  ⚠️ Empty file, skipping")
         return 0
 
     chunks = chunk_text(content)
     print(f"  📄 Split into {len(chunks)} chunks")
 
-    ingested = 0
+    if not chunks:
+        return 0
+
+    batch_items = []
     current_pos = 0
 
     for i, chunk in enumerate(chunks):
@@ -149,17 +160,21 @@ def ingest_file(filepath: str, notebook_id: str):
             "start_char": start_char,
             "end_char": end_char
         }
+        batch_items.append({
+            "text": chunk,
+            "metadata": json.dumps(metadata)
+        })
 
-        try:
-            ingest_text(chunk, json.dumps(metadata), notebook_id)
-            ingested += 1
-        except Exception as e:
-            print(f"  ❌ Error ingesting chunk {i+1}: {e}")
+    try:
+        res = ingest_text_batch(batch_items, notebook_id)
+        ingested = len(res.get("ids", []))
+        print(f"  ✅ Ingested {ingested}/{len(chunks)} chunks from {filepath}")
+        return ingested
+    except Exception as e:
+        print(f"  ❌ Error ingesting file {filepath}: {e}")
+        raise e
 
-    print(f"  ✅ Ingested {ingested}/{len(chunks)} chunks\n")
-    return ingested
-
-def ingest_directory(directory: str, pattern: str = "**/*.md", max_files: int = None, notebook_id: str = None):
+def ingest_directory(directory: str, pattern: str = "**/*.md", max_files: int = None, notebook_id: str = None, workers: int = 4):
     print(f"\n🔍 Scanning directory: {directory}")
     print(f"Pattern: {pattern}\n")
 
@@ -179,20 +194,20 @@ def ingest_directory(directory: str, pattern: str = "**/*.md", max_files: int = 
     failed_files = 0
     start_time = time.time()
 
-    for idx, filepath in enumerate(files, 1):
-        print(f"[{idx}/{len(files)}] ", end="")
-        try:
-            chunks = ingest_file(filepath, notebook_id)
-            total_chunks += chunks
-        except requests.exceptions.ConnectionError:
-            print(f"  ❌ Cannot connect to RAG server at {RAG_API_URL}")
-            return
-        except Exception as e:
-            print(f"  ❌ Failed: {e}")
-            failed_files += 1
-
-        time.sleep(0.05 if idx % 10 else 0.2)
-        gc.collect()
+    print(f"Using {workers} parallel ingestion workers...")
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(ingest_file, fp, notebook_id): fp for fp in files}
+        for future in as_completed(futures):
+            fp = futures[future]
+            try:
+                chunks = future.result()
+                total_chunks += chunks
+            except requests.exceptions.ConnectionError:
+                print(f"  ❌ Cannot connect to RAG server at {RAG_API_URL}")
+                return
+            except Exception as e:
+                print(f"  ❌ Failed to process {fp}: {e}")
+                failed_files += 1
 
     elapsed = time.time() - start_time
     print(f"\n{'='*60}")
@@ -202,43 +217,60 @@ def ingest_directory(directory: str, pattern: str = "**/*.md", max_files: int = 
     print(f"Time elapsed: {elapsed:.2f}s")
     print(f"{'='*60}\n")
 
-def ingest_urls(urls: List[str], notebook_id: str = None):
-    print(f"\n🌐 Downloading {len(urls)} webpages\n")
+def ingest_url_single(url: str, notebook_id: str) -> int:
+    print(f"Processing: {url}")
+    try:
+        content = download_webpage(url)
+        chunks = chunk_text(content)
+        print(f"  📄 Split into {len(chunks)} chunks from {url}")
+
+        if not chunks:
+            return 0
+
+        batch_items = []
+        current_pos = 0
+        for i, chunk in enumerate(chunks):
+            start_char = content.find(chunk, current_pos)
+            if start_char == -1:
+                start_char = current_pos
+            end_char = start_char + len(chunk)
+            current_pos = end_char
+
+            metadata = {
+                "source_file": url,
+                "source_type": "url",
+                "chunk_index": i + 1,
+                "start_char": start_char,
+                "end_char": end_char
+            }
+            batch_items.append({
+                "text": chunk,
+                "metadata": json.dumps(metadata)
+            })
+
+        res = ingest_text_batch(batch_items, notebook_id)
+        ingested = len(res.get("ids", []))
+        print(f"  ✅ Ingested {ingested}/{len(chunks)} chunks from {url}")
+        return ingested
+    except Exception as e:
+        print(f"  ❌ Error processing {url}: {e}")
+        return 0
+
+def ingest_urls(urls: List[str], notebook_id: str = None, workers: int = 4):
+    print(f"\n🌐 Downloading and ingesting {len(urls)} webpages with {workers} workers...\n")
     total_chunks = 0
+    start_time = time.time()
 
-    for url in urls:
-        print(f"Processing: {url}")
-        try:
-            content = download_webpage(url)
-            chunks = chunk_text(content)
-            print(f"  📄 Split into {len(chunks)} chunks")
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(ingest_url_single, url, notebook_id): url for url in urls}
+        for future in as_completed(futures):
+            try:
+                total_chunks += future.result()
+            except Exception:
+                pass
 
-            current_pos = 0
-            for i, chunk in enumerate(chunks):
-                start_char = content.find(chunk, current_pos)
-                if start_char == -1:
-                    start_char = current_pos
-                end_char = start_char + len(chunk)
-                current_pos = end_char
-
-                metadata = {
-                    "source_file": url,
-                    "source_type": "url",
-                    "chunk_index": i + 1,
-                    "start_char": start_char,
-                    "end_char": end_char
-                }
-
-                ingest_text(chunk, json.dumps(metadata), notebook_id)
-                total_chunks += 1
-
-            print(f"  ✅ Ingested {len(chunks)} chunks\n")
-            time.sleep(0.5)
-
-        except Exception as e:
-            print(f"  ❌ Error: {e}\n")
-
-    print(f"\n✅ Total chunks ingested: {total_chunks}\n")
+    elapsed = time.time() - start_time
+    print(f"\n✅ COMPLETE: Ingested {total_chunks} chunks in {elapsed:.2f}s\n")
 
 if __name__ == "__main__":
     import argparse
@@ -253,6 +285,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--notebook", required=True, help="Target notebook id")
     parser.add_argument("--url", help="Ingest a single webpage instead of a directory")
+    parser.add_argument("--workers", type=int, default=4, help="Number of parallel worker threads (default: 4)")
     parser.add_argument("directory", nargs="?", help="Directory to scan for files")
     parser.add_argument(
         "pattern", nargs="?", default="**/*.md", help="Glob pattern (default: **/*.md)"
@@ -263,8 +296,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.url:
-        ingest_urls([args.url], args.notebook)
+        ingest_urls([args.url], args.notebook, args.workers)
     elif args.directory:
-        ingest_directory(args.directory, args.pattern, args.max_files, args.notebook)
+        ingest_directory(args.directory, args.pattern, args.max_files, args.notebook, args.workers)
     else:
         parser.error("either --url or a directory must be given")
