@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { FileText, Plus, Trash2, Loader2, FolderOpen } from 'lucide-react';
+import { FileText, Plus, Trash2, Loader2, FolderOpen, RotateCcw } from 'lucide-react';
 import { deleteSource, getDocumentViewUrl } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
-import { Button, Checkbox } from './ui';
+import { Button, Checkbox, IconButton } from './ui';
 
 function GithubMark({ className }) {
   return (
@@ -70,10 +70,40 @@ function SourceRow({ source, checked, onToggle, onDeleted }) {
   );
 }
 
-export default function SourcesPanel({ unchecked, setUnchecked, onAdd }) {
-  const { sources, ingestStatus } = useSystem();
+function PendingRow({ item, onRetry, onDismiss }) {
+  const failed = item.status === 'error';
+  return (
+    <div className="group flex items-center gap-3 h-10 px-4 rounded-lg">
+      <Checkbox checked={false} disabled onChange={() => {}} title="Not yet ingested" />
+      <span className="relative flex items-center justify-center w-3.5 flex-shrink-0">
+        <FileText className={`w-3.5 h-3.5 ${failed ? 'text-caution' : 'text-text-muted'}`} />
+        <span
+          className={`absolute -left-1.5 w-1.5 h-1.5 rounded-full ${
+            failed ? 'bg-caution' : 'bg-accent animate-pulse'
+          }`}
+        />
+      </span>
+      <span className="flex-1 min-w-0 truncate text-sm text-text-dim">{item.filename}</span>
+      {failed ? (
+        <span className="flex items-center gap-1 flex-shrink-0">
+          <IconButton icon={RotateCcw} onClick={() => onRetry(item.id)} title="Retry" />
+          <IconButton icon={Trash2} danger onClick={() => onDismiss(item.id)} title="Dismiss" />
+        </span>
+      ) : (
+        <span className="font-mono text-2xs text-accent flex-shrink-0">
+          {item.status === 'ingesting' ? 'ingesting' : 'queued'}
+        </span>
+      )}
+    </div>
+  );
+}
+
+export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpen }) {
+  const { sources, ingestStatus, uploads, retryUpload, dismissUpload } = useSystem();
   const allChecked = unchecked.size === 0;
   const totalChunks = sources.reduce((acc, s) => acc + (s.chunks || 0), 0);
+
+  const pending = dialogOpen ? [] : uploads.filter((u) => u.status !== 'done');
 
   const toggleAll = () => {
     setUnchecked(allChecked ? new Set(sources.map((s) => s.source_file)) : new Set());
@@ -105,7 +135,7 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd }) {
       )}
 
       <div className="flex-1 overflow-y-auto p-2">
-        {sources.length === 0 ? (
+        {sources.length === 0 && pending.length === 0 ? (
           <div className="flex flex-col items-center gap-4 px-6 py-16 text-center">
             <FolderOpen className="w-6 h-6 text-text-muted" />
             <p className="text-sm text-text-dim">
@@ -116,21 +146,31 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd }) {
             </Button>
           </div>
         ) : (
-          sources.map((s) => (
-            <SourceRow
-              key={s.source_file}
-              source={s}
-              checked={!unchecked.has(s.source_file)}
-              onToggle={() => toggleOne(s.source_file)}
-              onDeleted={(sf) =>
-                setUnchecked((prev) => {
-                  const next = new Set(prev);
-                  next.delete(sf);
-                  return next;
-                })
-              }
-            />
-          ))
+          <>
+            {pending.map((item) => (
+              <PendingRow
+                key={item.id}
+                item={item}
+                onRetry={(id) => retryUpload(id, item.strategy || 'auto')}
+                onDismiss={dismissUpload}
+              />
+            ))}
+            {sources.map((s) => (
+              <SourceRow
+                key={s.source_file}
+                source={s}
+                checked={!unchecked.has(s.source_file)}
+                onToggle={() => toggleOne(s.source_file)}
+                onDeleted={(sf) =>
+                  setUnchecked((prev) => {
+                    const next = new Set(prev);
+                    next.delete(sf);
+                    return next;
+                  })
+                }
+              />
+            ))}
+          </>
         )}
       </div>
 

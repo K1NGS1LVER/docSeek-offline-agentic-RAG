@@ -147,6 +147,7 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
                 unchecked={unchecked}
                 setUnchecked={setUnchecked}
                 onAdd={() => setAddOpen(true)}
+                dialogOpen={addOpen}
               />
             </motion.div>
           )}
