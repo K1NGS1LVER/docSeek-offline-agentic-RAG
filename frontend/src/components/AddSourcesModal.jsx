@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -11,7 +11,7 @@ import {
   ArrowUpFromLine,
   ClipboardType,
 } from 'lucide-react';
-import { uploadFile, ingestText, ingestGithub } from '../lib/api';
+import { ingestText, ingestGithub } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
 import { Modal, SectionLabel, Button, Segmented, IconButton, inputCls, textareaCls } from './ui';
 
@@ -27,16 +27,15 @@ function GithubMark({ className }) {
 
 const STATUS = {
   queued: { label: 'queued', color: 'text-text-muted', icon: FileText },
-  uploading: { label: 'uploading', color: 'text-info', icon: Loader2 },
-  indexing: { label: 'indexing', color: 'text-accent', icon: Loader2 },
-  indexed: { label: 'indexed', color: 'text-success', icon: CheckCircle2 },
+  ingesting: { label: 'indexing', color: 'text-accent', icon: Loader2 },
+  done: { label: 'indexed', color: 'text-success', icon: CheckCircle2 },
   error: { label: 'failed', color: 'text-caution', icon: XCircle },
 };
 
 function FileRow({ item, onRemove, onRetry }) {
   const cfg = STATUS[item.status];
   const Icon = cfg.icon;
-  const spinning = ['uploading', 'indexing'].includes(item.status);
+  const spinning = ['ingesting'].includes(item.status);
 
   return (
     <motion.div
@@ -46,10 +45,12 @@ function FileRow({ item, onRemove, onRetry }) {
       className="flex items-center gap-3 bg-panel border border-border rounded-lg px-4 h-12"
     >
       <FileText className="w-4 h-4 text-accent flex-shrink-0" />
-      <span className="text-sm font-medium text-text flex-1 truncate">{item.file.name}</span>
-      <span className="font-mono text-2xs text-text-muted hidden sm:block">
-        {(item.file.size / 1024).toFixed(1)} KB
-      </span>
+      <span className="text-sm font-medium text-text flex-1 truncate">{item.filename}</span>
+      {item.file && (
+        <span className="font-mono text-2xs text-text-muted hidden sm:block">
+          {(item.file.size / 1024).toFixed(1)} KB
+        </span>
+      )}
       {item.chunks != null && (
         <span className="font-mono text-2xs text-text-dim">{item.chunks} chunks</span>
       )}
@@ -69,9 +70,16 @@ function FileRow({ item, onRemove, onRetry }) {
 
 export default function AddSourcesModal({ onClose }) {
   const { notebookId } = useParams();
-  const { refreshSources, refreshStats, addLog, refreshIngestStatus } = useSystem();
-  const [queue, setQueue] = useState([]);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const {
+    refreshSources,
+    refreshStats,
+    refreshIngestStatus,
+    uploads,
+    enqueueUploads,
+    startUploads,
+    retryUpload,
+    dismissUpload,
+  } = useSystem();
   const [dragOver, setDragOver] = useState(false);
   const [strategy, setStrategy] = useState('auto');
   const [panel, setPanel] = useState(null); // 'paste' | 'github' | null
@@ -81,64 +89,6 @@ export default function AddSourcesModal({ onClose }) {
   const [ghUrl, setGhUrl] = useState('');
   const [ghSub, setGhSub] = useState('');
   const fileRef = useRef(null);
-  const nextId = useRef(0);
-
-  const addFiles = useCallback((fileList) => {
-    const items = Array.from(fileList).map((f) => ({
-      id: nextId.current++,
-      file: f,
-      status: 'queued',
-      chunks: null,
-      error: null,
-    }));
-    setQueue((prev) => [...prev, ...items]);
-  }, []);
-
-  const removeItem = (id) => setQueue((q) => q.filter((i) => i.id !== id));
-  const updateItem = (id, patch) =>
-    setQueue((q) => q.map((i) => (i.id === id ? { ...i, ...patch } : i)));
-  const retryItem = (id) => updateItem(id, { status: 'queued', error: null });
-
-  // Upload several files at once. The backend serializes only the index write
-  // (parse/OCR/embed overlap), so a few parallel requests ingest much faster
-  // than a strict one-at-a-time loop, especially for PDFs.
-  const UPLOAD_CONCURRENCY = 4;
-
-  const processQueue = async () => {
-    setIsProcessing(true);
-    const pending = queue.filter((i) => i.status === 'queued' || i.status === 'error');
-
-    const uploadOne = async (item) => {
-      updateItem(item.id, { status: 'indexing' });
-      addLog(`Uploading ${item.file.name} (${strategy})...`);
-      try {
-        const { data } = await uploadFile(notebookId, item.file, strategy === 'auto' ? null : strategy);
-        updateItem(item.id, { status: 'indexed', chunks: data.chunks });
-        addLog(`Indexed ${item.file.name}: ${data.chunks} chunks in ${data.time_seconds}s`);
-      } catch (e) {
-        updateItem(item.id, { status: 'error', error: e.message });
-        addLog(`Failed ${item.file.name}: ${e.message}`, 'ERROR');
-      }
-    };
-
-    // A small pool of workers pulls from the pending list until it's drained.
-    let cursor = 0;
-    const worker = async () => {
-      while (cursor < pending.length) {
-        const item = pending[cursor++];
-        await uploadOne(item);
-      }
-    };
-    const workers = Array.from(
-      { length: Math.min(UPLOAD_CONCURRENCY, pending.length) },
-      worker
-    );
-    await Promise.all(workers);
-
-    await refreshSources();
-    await refreshStats();
-    setIsProcessing(false);
-  };
 
   const handlePaste = async () => {
     if (!pasteText.trim()) return;
@@ -146,14 +96,13 @@ export default function AddSourcesModal({ onClose }) {
     const name = pasteName.trim() || `pasted-${new Date().toISOString().slice(0, 10)}.txt`;
     try {
       await ingestText(notebookId, pasteText.trim(), JSON.stringify({ filename: name, source_file: name }));
-      addLog(`Ingested pasted text as ${name}`);
+      refreshSources();
+      refreshStats();
       setPasteText('');
       setPasteName('');
       setPanel(null);
-      await refreshSources();
-      await refreshStats();
-    } catch (e) {
-      addLog(`Paste ingest failed: ${e.message}`, 'ERROR');
+    } catch {
+      // Non-fatal here; keep inputs so user can retry
     }
     setPasting(false);
   };
@@ -162,18 +111,18 @@ export default function AddSourcesModal({ onClose }) {
     if (!ghUrl.trim()) return;
     try {
       await ingestGithub(notebookId, ghUrl.trim(), ghSub.trim() || null);
-      addLog(`GitHub ingestion started: ${ghUrl}`);
       setGhUrl('');
       setGhSub('');
       setPanel(null);
       refreshIngestStatus();
       onClose();
-    } catch (e) {
-      addLog(`GitHub ingest failed: ${e.message}`, 'ERROR');
+    } catch {
+      // Non-fatal here; keep inputs so user can retry
     }
   };
 
-  const queuedCount = queue.filter((i) => i.status === 'queued' || i.status === 'error').length;
+  const queuedCount = uploads.filter((u) => u.status === 'queued').length;
+  const isProcessing = uploads.some((u) => u.status === 'ingesting');
 
   return (
     <Modal title="Add sources" onClose={onClose}>
@@ -181,7 +130,7 @@ export default function AddSourcesModal({ onClose }) {
       <div
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); enqueueUploads(e.dataTransfer.files); }}
         onClick={() => fileRef.current?.click()}
         className={`cursor-pointer border-2 border-dashed rounded-xl px-6 py-12 text-center transition-all ${
           dragOver
@@ -194,7 +143,7 @@ export default function AddSourcesModal({ onClose }) {
           type="file"
           multiple
           accept=".txt,.md,.markdown,.html,.htm,.docx,.pdf,.pptx"
-          onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
+          onChange={(e) => { enqueueUploads(e.target.files); e.target.value = ''; }}
           className="hidden"
         />
         <ArrowUpFromLine className={`w-6 h-6 mx-auto ${dragOver ? 'text-accent' : 'text-accent/70'}`} />
@@ -300,17 +249,28 @@ export default function AddSourcesModal({ onClose }) {
       </AnimatePresence>
 
       {/* Upload queue */}
-      {queue.length > 0 && (
+      {uploads.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <SectionLabel className="mb-0">Queue · {queue.length}</SectionLabel>
+            <SectionLabel className="mb-0">Queue · {uploads.length}</SectionLabel>
             <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setQueue([])} disabled={isProcessing}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  uploads.forEach((u) => {
+                    if (u.status !== 'ingesting') {
+                      dismissUpload(u.id);
+                    }
+                  });
+                }}
+                disabled={isProcessing}
+              >
                 Clear
               </Button>
               <Button
                 size="sm"
-                onClick={processQueue}
+                onClick={() => startUploads(strategy)}
                 disabled={isProcessing || queuedCount === 0}
                 busy={isProcessing}
               >
@@ -319,11 +279,18 @@ export default function AddSourcesModal({ onClose }) {
             </div>
           </div>
           <div className="space-y-2">
-            <AnimatePresence>
-              {queue.map((item) => (
-                <FileRow key={item.id} item={item} onRemove={removeItem} onRetry={retryItem} />
-              ))}
-            </AnimatePresence>
+            <div className="space-y-2">
+              <AnimatePresence>
+                {uploads.map((item) => (
+                  <FileRow
+                    key={item.id}
+                    item={item}
+                    onRemove={dismissUpload}
+                    onRetry={(id) => retryUpload(id, strategy)}
+                  />
+                ))}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
       )}
