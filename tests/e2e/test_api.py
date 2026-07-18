@@ -263,6 +263,24 @@ def test_ingest_raw_text(server, notebook):
     assert r.json()["id"] > 0
 
 
+def test_ingest_batch_text(server, notebook):
+    r = requests.post(
+        f"{server}/ingest/batch",
+        json={
+            "notebook_id": notebook,
+            "documents": [
+                {"text": "First batch text snippet about xylophones.", "metadata": "{\"source_file\": \"xylophone.txt\"}"},
+                {"text": "Second batch text snippet about cellos.", "metadata": "{\"source_file\": \"cello.txt\"}"},
+            ],
+        },
+        timeout=TIMEOUT,
+    )
+    assert r.status_code == 200
+    ids = r.json()["ids"]
+    assert len(ids) == 2
+    assert all(idx > 0 for idx in ids)
+
+
 def test_upload_pdf_extracts_and_indexes(server, notebook):
     data = make_pdf_bytes("Photosynthesis converts sunlight into chemical energy in plants.")
     r = upload_bytes(server, "biology.pdf", data, "application/pdf", notebook=notebook)
