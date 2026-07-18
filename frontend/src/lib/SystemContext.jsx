@@ -12,8 +12,9 @@ const SystemContext = createContext(null);
 
 // The active podcast job_id is persisted so generation survives Studio tab
 // switches (and even a page reload) -- the backend runs it in a background
-// thread, so the UI just needs to keep polling and re-attach.
-const PODCAST_JOB_KEY = 'ds_podcast_job';
+// thread, so the UI just needs to keep polling and re-attach. Namespaced per
+// notebook so switching notebooks never re-attaches to the wrong job.
+const podcastJobKey = (notebookId) => `ds_podcast_job_${notebookId}`;
 
 // The hook and provider live together by design; splitting files just for
 // fast refresh would complicate every import site.
@@ -22,7 +23,7 @@ export function useSystem() {
   return useContext(SystemContext);
 }
 
-export function SystemProvider({ children }) {
+export function SystemProvider({ notebookId, children }) {
   const [stats, setStats] = useState(null);
   const [ingestStatus, setIngestStatus] = useState(null);
   // Rich per-source rows: {source_file, filename, chunks, first_chunk_id, …}
@@ -42,8 +43,9 @@ export function SystemProvider({ children }) {
   }, []);
 
   const refreshStats = useCallback(async () => {
+    if (!notebookId) return;
     try {
-      const { data, latency } = await getStats();
+      const { data, latency } = await getStats(notebookId);
       setStats(data);
       setLastLatency(latency);
       setHealth('READY');
@@ -53,20 +55,22 @@ export function SystemProvider({ children }) {
       setError(e.message);
       addLog(`Stats fetch failed: ${e.message}`, 'ERROR');
     }
-  }, [addLog]);
+  }, [notebookId, addLog]);
 
   const refreshSources = useCallback(async () => {
+    if (!notebookId) return;
     try {
-      const { data } = await getSources();
+      const { data } = await getSources(notebookId);
       setSources(data);
     } catch (e) {
       addLog(`Sources fetch failed: ${e.message}`, 'ERROR');
     }
-  }, [addLog]);
+  }, [notebookId, addLog]);
 
   const refreshIngestStatus = useCallback(async () => {
+    if (!notebookId) return;
     try {
-      const { data } = await getIngestStatus();
+      const { data } = await getIngestStatus(notebookId);
       setIngestStatus(data);
       if (data.is_ingesting) {
         setHealth('INDEXING');
@@ -74,42 +78,56 @@ export function SystemProvider({ children }) {
     } catch {
       // Server unreachable; keep the last known status.
     }
-  }, []);
+  }, [notebookId]);
 
   const refreshPodcasts = useCallback(async () => {
+    if (!notebookId) return;
     try {
-      const { data } = await getPodcasts();
+      const { data } = await getPodcasts(notebookId);
       setPodcasts(data);
     } catch {
       // non-fatal: keep the last known list
     }
-  }, []);
+  }, [notebookId]);
 
   // Start a podcast job and begin tracking it (persisted across tab switches).
   const startPodcast = useCallback(async (sourceFiles) => {
-    const { data } = await createPodcast(sourceFiles);
-    localStorage.setItem(PODCAST_JOB_KEY, data.job_id);
+    if (!notebookId) return;
+    const { data } = await createPodcast(notebookId, sourceFiles);
+    localStorage.setItem(podcastJobKey(notebookId), data.job_id);
     setPodcastJob({
       job_id: data.job_id, status: 'running', stage: 'queued', message: 'Starting…', progress: 0,
     });
-  }, []);
+  }, [notebookId]);
 
   // Clear a finished/failed job banner.
   const dismissPodcastJob = useCallback(() => {
-    localStorage.removeItem(PODCAST_JOB_KEY);
+    if (notebookId) localStorage.removeItem(podcastJobKey(notebookId));
     setPodcastJob(null);
-  }, []);
+  }, [notebookId]);
 
   // Initial load + polling. These are async fetchers: state is set in their
-  // promise continuations, not synchronously in the effect body.
+  // promise continuations, not synchronously in the effect body. Re-runs
+  // whenever the active notebook changes, resetting per-notebook state first
+  // so stale data from the previous notebook never lingers on screen.
   useEffect(() => {
+    if (!notebookId) return undefined;
+
     // eslint-disable-next-line react-hooks/set-state-in-effect
+    setStats(null);
+    setSources([]);
+    setIngestStatus(null);
+    setPodcasts([]);
+    setPodcastJob(null);
+    setLastLatency(null);
+    setError(null);
+
     refreshStats();
     refreshSources();
     refreshIngestStatus();
     refreshPodcasts();
     // Re-attach to a podcast job that was still running before this mount.
-    const saved = localStorage.getItem(PODCAST_JOB_KEY);
+    const saved = localStorage.getItem(podcastJobKey(notebookId));
     if (saved) {
       setPodcastJob({
         job_id: saved, status: 'running', stage: 'resuming',
@@ -123,22 +141,22 @@ export function SystemProvider({ children }) {
     }, 3000);
 
     return () => clearInterval(id);
-  }, [refreshStats, refreshSources, refreshIngestStatus, refreshPodcasts]);
+  }, [notebookId, refreshStats, refreshSources, refreshIngestStatus, refreshPodcasts]);
 
   // Poll the active podcast job until it reaches a terminal state. Runs at the
   // app level, so switching Studio tabs never interrupts it.
   useEffect(() => {
-    if (podcastJob?.status !== 'running') return undefined;
+    if (!notebookId || podcastJob?.status !== 'running') return undefined;
     const id = setInterval(async () => {
       try {
-        const { data } = await getPodcastStatus(podcastJob.job_id);
+        const { data } = await getPodcastStatus(notebookId, podcastJob.job_id);
         if (data.status === 'completed') {
-          localStorage.removeItem(PODCAST_JOB_KEY);
+          localStorage.removeItem(podcastJobKey(notebookId));
           setPodcastJob(null);
           addLog(`Podcast ready: ${data.title || podcastJob.job_id}`);
           refreshPodcasts();
         } else if (data.status === 'failed') {
-          localStorage.removeItem(PODCAST_JOB_KEY);
+          localStorage.removeItem(podcastJobKey(notebookId));
           setPodcastJob({ ...data, status: 'failed' });
           addLog(`Podcast failed: ${data.error || data.message}`, 'ERROR');
         } else {
@@ -147,25 +165,25 @@ export function SystemProvider({ children }) {
       } catch (e) {
         // Job unknown (e.g. server restarted): stop tracking a dead job.
         if (e.message && e.message.includes('Unknown podcast job')) {
-          localStorage.removeItem(PODCAST_JOB_KEY);
+          localStorage.removeItem(podcastJobKey(notebookId));
           setPodcastJob(null);
         }
         // otherwise transient; keep polling
       }
     }, 2000);
     return () => clearInterval(id);
-  }, [podcastJob?.status, podcastJob?.job_id, addLog, refreshPodcasts]);
+  }, [notebookId, podcastJob?.status, podcastJob?.job_id, addLog, refreshPodcasts]);
 
   // Poll faster during ingestion
   useEffect(() => {
-    if (!ingestStatus?.is_ingesting) return;
+    if (!notebookId || !ingestStatus?.is_ingesting) return;
     const id = setInterval(() => {
       refreshIngestStatus();
       refreshSources();
       refreshStats();
     }, 1000);
     return () => clearInterval(id);
-  }, [ingestStatus?.is_ingesting, refreshIngestStatus, refreshSources, refreshStats]);
+  }, [notebookId, ingestStatus?.is_ingesting, refreshIngestStatus, refreshSources, refreshStats]);
 
   const value = {
     stats,
