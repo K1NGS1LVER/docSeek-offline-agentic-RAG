@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { FileText, Plus, Trash2, Loader2, FolderOpen } from 'lucide-react';
 import { deleteSource, getDocumentViewUrl } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
@@ -13,6 +14,7 @@ function GithubMark({ className }) {
 }
 
 function SourceRow({ source, checked, onToggle, onDeleted }) {
+  const { notebookId } = useParams();
   const { addLog, refreshSources, refreshStats } = useSystem();
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -25,7 +27,7 @@ function SourceRow({ source, checked, onToggle, onDeleted }) {
     }
     setDeleting(true);
     try {
-      await deleteSource(source.source_file);
+      await deleteSource(notebookId, source.source_file);
       addLog(`Deleted source ${source.filename}`);
       await refreshSources();
       await refreshStats();
@@ -44,7 +46,7 @@ function SourceRow({ source, checked, onToggle, onDeleted }) {
       <Checkbox checked={checked} onChange={onToggle} title="Include in retrieval" />
       <Icon className="w-3.5 h-3.5 text-accent flex-shrink-0" />
       <a
-        href={source.first_chunk_id != null ? getDocumentViewUrl(source.first_chunk_id) : undefined}
+        href={source.first_chunk_id != null ? getDocumentViewUrl(notebookId, source.first_chunk_id) : undefined}
         target="_blank"
         rel="noopener noreferrer"
         title={`${source.filename} — ${source.chunks} chunks (${source.chunking || 'unknown'} chunking)`}

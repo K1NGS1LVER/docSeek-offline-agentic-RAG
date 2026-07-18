@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { Plus, Trash2, Loader2, Mic, Download, AlertCircle, X } from 'lucide-react';
 import { useSystem } from '../lib/SystemContext';
 import { getPodcastAudioUrl } from '../lib/api';
@@ -102,6 +103,7 @@ function fmtDuration(seconds) {
 }
 
 function EpisodeCard({ ep }) {
+  const { notebookId } = useParams();
   return (
     <div className="bg-panel border border-border rounded-xl p-4">
       <h4 className="font-serif text-base font-medium text-text break-words">
@@ -114,11 +116,11 @@ function EpisodeCard({ ep }) {
       <audio
         controls
         preload="none"
-        src={getPodcastAudioUrl(ep.job_id)}
+        src={getPodcastAudioUrl(notebookId, ep.job_id)}
         className="w-full mt-3 h-9"
       />
       <a
-        href={getPodcastAudioUrl(ep.job_id)}
+        href={getPodcastAudioUrl(notebookId, ep.job_id)}
         download={`${(ep.title || 'audio-overview').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.wav`}
         className="inline-flex items-center gap-1.5 mt-2 font-mono text-2xs text-text-muted hover:text-accent transition-colors"
       >

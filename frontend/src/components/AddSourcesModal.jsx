@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   FileText,
@@ -67,6 +68,7 @@ function FileRow({ item, onRemove, onRetry }) {
 }
 
 export default function AddSourcesModal({ onClose }) {
+  const { notebookId } = useParams();
   const { refreshSources, refreshStats, addLog, refreshIngestStatus } = useSystem();
   const [queue, setQueue] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -110,7 +112,7 @@ export default function AddSourcesModal({ onClose }) {
       updateItem(item.id, { status: 'indexing' });
       addLog(`Uploading ${item.file.name} (${strategy})...`);
       try {
-        const { data } = await uploadFile(item.file, strategy === 'auto' ? null : strategy);
+        const { data } = await uploadFile(notebookId, item.file, strategy === 'auto' ? null : strategy);
         updateItem(item.id, { status: 'indexed', chunks: data.chunks });
         addLog(`Indexed ${item.file.name}: ${data.chunks} chunks in ${data.time_seconds}s`);
       } catch (e) {
@@ -143,7 +145,7 @@ export default function AddSourcesModal({ onClose }) {
     setPasting(true);
     const name = pasteName.trim() || `pasted-${new Date().toISOString().slice(0, 10)}.txt`;
     try {
-      await ingestText(pasteText.trim(), JSON.stringify({ filename: name, source_file: name }));
+      await ingestText(notebookId, pasteText.trim(), JSON.stringify({ filename: name, source_file: name }));
       addLog(`Ingested pasted text as ${name}`);
       setPasteText('');
       setPasteName('');
@@ -159,7 +161,7 @@ export default function AddSourcesModal({ onClose }) {
   const handleGithub = async () => {
     if (!ghUrl.trim()) return;
     try {
-      await ingestGithub(ghUrl.trim(), ghSub.trim() || null);
+      await ingestGithub(notebookId, ghUrl.trim(), ghSub.trim() || null);
       addLog(`GitHub ingestion started: ${ghUrl}`);
       setGhUrl('');
       setGhSub('');

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   RotateCw,
@@ -105,6 +106,7 @@ function DebugConsole({ addLog }) {
 
 /* ================================================================== */
 export default function SettingsModal({ theme, setTheme, onClose }) {
+  const { notebookId } = useParams();
   const { addLog, refreshStats, refreshSources } = useSystem();
   const [rebuilding, setRebuilding] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -117,7 +119,7 @@ export default function SettingsModal({ theme, setTheme, onClose }) {
     setFeedback(null);
     addLog('Rebuild index from Settings');
     try {
-      const { latency } = await rebuildIndex();
+      const { latency } = await rebuildIndex(notebookId);
       setFeedback({ type: 'success', msg: `Index rebuilt in ${latency}ms` });
       addLog(`Rebuilt in ${latency}ms`);
       refreshStats();
@@ -138,7 +140,7 @@ export default function SettingsModal({ theme, setTheme, onClose }) {
     setFeedback(null);
     addLog('SYSTEM RESET initiated', 'WARN');
     try {
-      const { latency } = await resetSystem();
+      const { latency } = await resetSystem(notebookId);
       setFeedback({ type: 'success', msg: `System reset complete (${latency}ms). All data wiped.` });
       addLog(`System reset complete in ${latency}ms`);
       refreshStats();

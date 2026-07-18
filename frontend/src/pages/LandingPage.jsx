@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getStats } from '../lib/api'
 
 /* ── Terminal demos: each chip runs one of these ─────────────────── */
 const DEMOS = [
@@ -242,12 +241,8 @@ function StatChip({ children }) {
 /* ================================================================== */
 export default function LandingPage({ theme, setTheme }) {
     const navigate = useNavigate()
-    const [stats, setStats] = useState(null)
+    const [stats] = useState(null)
     const [demoIdx, setDemoIdx] = useState(0)
-
-    useEffect(() => {
-        getStats().then(({ data }) => setStats(data)).catch(() => {})
-    }, [])
 
     const cycle = useCallback(() => setDemoIdx((i) => (i + 1) % DEMOS.length), [])
 
