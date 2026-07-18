@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom';
-import { Sun, Moon, Settings, PanelLeft, PanelRight } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Sun, Moon, Settings, PanelLeft, PanelRight, ArrowLeft } from 'lucide-react';
 import { useSystem } from '../lib/SystemContext';
 import { IconButton } from './ui';
 
@@ -13,6 +13,7 @@ const HEALTH_STYLES = {
 export default function WorkspaceHeader({
   theme,
   setTheme,
+  notebook,
   onOpenSettings,
   sourcesOpen,
   studioOpen,
@@ -21,6 +22,7 @@ export default function WorkspaceHeader({
 }) {
   const { health, stats, lastLatency } = useSystem();
   const h = HEALTH_STYLES[health] || HEALTH_STYLES.CONNECTING;
+  const navigate = useNavigate();
 
   return (
     <header className="h-14 flex-shrink-0 flex items-center gap-4 px-6 bg-surface border-b border-border">
@@ -34,7 +36,22 @@ export default function WorkspaceHeader({
         doc<span className="text-accent">Seek</span>
       </Link>
 
+      <IconButton icon={ArrowLeft} onClick={() => navigate('/app')} title="All notebooks" />
+
       <div className="w-px h-4 bg-border-bright" />
+
+      {notebook && (
+        <>
+          <span className="flex items-center gap-2 min-w-0">
+            <span className="text-base leading-none flex-shrink-0">{notebook.emoji || '📓'}</span>
+            <span className="font-serif text-sm font-medium text-text truncate max-w-[240px]">
+              {notebook.name}
+            </span>
+          </span>
+
+          <div className="w-px h-4 bg-border-bright" />
+        </>
+      )}
 
       <div className={`flex items-center gap-2 font-mono text-xs ${h.text}`}>
         <span className={`w-2 h-2 rounded-full ${h.dot}`} />

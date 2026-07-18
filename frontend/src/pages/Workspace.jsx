@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { SystemProvider, useSystem } from '../lib/SystemContext';
+import { listNotebooks } from '../lib/api';
 import WorkspaceHeader from '../components/WorkspaceHeader';
 import SourcesPanel from '../components/SourcesPanel';
 import ChatPanel from '../components/ChatPanel';
@@ -8,7 +10,6 @@ import StudioPanel from '../components/StudioPanel';
 import AddSourcesModal from '../components/AddSourcesModal';
 import SettingsModal from '../components/SettingsModal';
 
-const NOTES_KEY = 'ds_notes';
 const PANELS_KEY = 'ds_panels';
 // Must match SourcesPanel.jsx's w-72 / StudioPanel.jsx's w-80 (theme.css
 // --sources-w / --studio-w) so the slide animation lands on the panel's
@@ -17,9 +18,13 @@ const SOURCES_WIDTH = 288;
 const STUDIO_WIDTH = 320;
 const PANEL_TRANSITION = { duration: 0.2, ease: 'easeInOut' };
 
-function loadNotes() {
+// Notes are scoped per notebook so switching notebooks never mixes their
+// saved notes together.
+const notesKey = (notebookId) => `ds_notes_${notebookId}`;
+
+function loadNotes(key) {
   try {
-    return JSON.parse(localStorage.getItem(NOTES_KEY)) || [];
+    return JSON.parse(localStorage.getItem(key)) || [];
   } catch {
     return [];
   }
@@ -37,7 +42,7 @@ function loadPanelState() {
   }
 }
 
-function WorkspaceInner({ theme, setTheme }) {
+function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
   const { stats, sources } = useSystem();
 
   // Retrieval scope: sources are included by default; unchecked ones are excluded.
@@ -47,11 +52,25 @@ function WorkspaceInner({ theme, setTheme }) {
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autoOpenedAdd, setAutoOpenedAdd] = useState(false);
-  const [notes, setNotes] = useState(loadNotes);
+  const [notes, setNotes] = useState(() => loadNotes(notesKey(notebookId)));
   const [questions, setQuestions] = useState([]);
 
+  // Always-current notebookId for the persist effect below, so it can key its
+  // localStorage write without listing notebookId as a dependency (which
+  // would fire it in the same commit as a notebook switch, before `notes`
+  // has been reloaded, clobbering the new notebook's saved notes).
+  const notebookIdRef = useRef(notebookId);
   useEffect(() => {
-    localStorage.setItem(NOTES_KEY, JSON.stringify(notes));
+    notebookIdRef.current = notebookId;
+  }, [notebookId]);
+
+  // Reload notes whenever the active notebook changes.
+  useEffect(() => {
+    setNotes(loadNotes(notesKey(notebookId)));
+  }, [notebookId]);
+
+  useEffect(() => {
+    localStorage.setItem(notesKey(notebookIdRef.current), JSON.stringify(notes));
   }, [notes]);
 
   useEffect(() => {
@@ -106,6 +125,7 @@ function WorkspaceInner({ theme, setTheme }) {
       <WorkspaceHeader
         theme={theme}
         setTheme={setTheme}
+        notebook={notebook}
         onOpenSettings={() => setSettingsOpen(true)}
         sourcesOpen={sourcesOpen}
         studioOpen={studioOpen}
@@ -169,9 +189,41 @@ function WorkspaceInner({ theme, setTheme }) {
 }
 
 export default function Workspace({ theme, setTheme }) {
+  const { notebookId } = useParams();
+  const navigate = useNavigate();
+  // The notebook record (name/emoji) for the header; null until loaded.
+  const [notebook, setNotebook] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setNotebook(null);
+
+    (async () => {
+      try {
+        const { data } = await listNotebooks();
+        if (cancelled) return;
+        const found = (data || []).find((nb) => nb.id === notebookId);
+        if (!found) {
+          navigate('/app', { replace: true });
+          return;
+        }
+        setNotebook(found);
+      } catch {
+        // Non-fatal here: a transient fetch failure just leaves the header's
+        // name/emoji blank; the rest of the workspace still works off
+        // notebookId directly.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [notebookId, navigate]);
+
   return (
-    <SystemProvider>
-      <WorkspaceInner theme={theme} setTheme={setTheme} />
+    <SystemProvider notebookId={notebookId}>
+      <WorkspaceInner theme={theme} setTheme={setTheme} notebookId={notebookId} notebook={notebook} />
     </SystemProvider>
   );
 }
