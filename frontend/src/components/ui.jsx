@@ -19,9 +19,9 @@ export function SectionLabel({ children, className = '' }) {
   );
 }
 
-export function Card({ children, className = '' }) {
+export function Card({ children, className = '', ...props }) {
   return (
-    <div className={`bg-surface border border-border rounded-xl ${className}`}>
+    <div {...props} className={`bg-surface border border-border rounded-xl ${className}`}>
       {children}
     </div>
   );
