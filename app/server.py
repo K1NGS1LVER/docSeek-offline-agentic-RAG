@@ -200,7 +200,7 @@ def _persist_chunks(rt: "Runtime", chunks, embeddings, safe_name, file_path, str
     chunks are (text, start_char, end_char) tuples aligned with embeddings.
     """
     with _ingest_lock:
-        doc_ids = []
+        db_items = []
         for i, (chunk_text, start_char, end_char) in enumerate(chunks):
             meta = {
                 "source_file": str(file_path),
@@ -213,7 +213,9 @@ def _persist_chunks(rt: "Runtime", chunks, embeddings, safe_name, file_path, str
             }
             if extra_meta:
                 meta.update(extra_meta)
-            doc_ids.append(database.insert_document(rt.db_path, chunk_text, json.dumps(meta)))
+            db_items.append({"content": chunk_text, "metadata": json.dumps(meta)})
+        
+        doc_ids = database.insert_documents_batch(rt.db_path, db_items)
         rt.engine.add_to_index(embeddings, doc_ids=doc_ids)
         rt.engine.save()
     return doc_ids
@@ -228,6 +230,17 @@ class IngestRequest(BaseModel):
     text: str
     metadata: Optional[str] = None
     notebook_id: str
+
+
+class BatchDocumentItem(BaseModel):
+    text: str
+    metadata: Optional[str] = None
+
+
+class BatchIngestRequest(BaseModel):
+    notebook_id: str
+    documents: List[BatchDocumentItem]
+
 
 
 class SearchRequest(BaseModel):
@@ -590,6 +603,48 @@ def ingest_document(request: IngestRequest):
     return {"status": "success", "id": doc_id}
 
 
+def get_friendly_error(e: Exception) -> str:
+    """Convert common connection/socket errors (e.g. BrokenPipeError, ConnectionRefusedError)
+    to friendly, actionable user-facing messages.
+    """
+    err_msg = str(e)
+    if (
+        "broken pipe" in err_msg.lower()
+        or "connection" in err_msg.lower()
+        or isinstance(e, (ConnectionError, BrokenPipeError))
+    ):
+        return (
+            "⚠️ Connection to Ollama failed. Please make sure Ollama is running (`ollama serve`) "
+            f"and the model is pulled (`ollama pull {LLM_MODEL}`)."
+        )
+    return f"⚠️ Server error: {err_msg}"
+
+
+@app.post("/ingest/batch")
+async def ingest_documents_batch(request: BatchIngestRequest):
+    rt = get_runtime(request.notebook_id)
+    if not request.documents:
+        return {"status": "success", "ids": []}
+
+    texts = [doc.text for doc in request.documents]
+
+    # Generate embeddings in a threadpool as a batch
+    embeddings = await run_in_threadpool(rt.engine.embed_batch, texts)
+
+    # Persist database records and update FAISS index under the lock
+    def _persist():
+        with _ingest_lock:
+            db_items = [{"content": doc.text, "metadata": doc.metadata} for doc in request.documents]
+            doc_ids = database.insert_documents_batch(rt.db_path, db_items)
+            rt.engine.add_to_index(embeddings, doc_ids=doc_ids)
+            rt.engine.save()
+            return doc_ids
+
+    doc_ids = await run_in_threadpool(_persist)
+    return {"status": "success", "ids": doc_ids}
+
+
+
 
 SIMILARITY_THRESHOLD = 0.20  # Minimum cosine similarity score to return a result
 
@@ -768,7 +823,7 @@ async def ask(request: AskRequest):
 
         except Exception as e:
             logger.error(f"ASK endpoint error: {e}")
-            yield {"data": json.dumps(f"⚠️ Server error: {str(e)}")}
+            yield {"data": json.dumps(get_friendly_error(e))}
 
     return EventSourceResponse(event_stream())
 
@@ -815,7 +870,7 @@ async def deep_research(request: ResearchRequest):
                     yield {"data": json.dumps(payload)}
         except Exception as e:
             logger.error(f"RESEARCH endpoint error: {e}")
-            yield {"data": json.dumps(f"⚠️ Server error: {str(e)}")}
+            yield {"data": json.dumps(get_friendly_error(e))}
 
     return EventSourceResponse(event_stream())
 
@@ -906,7 +961,7 @@ def _podcast_worker(job_id: str, notebook_id: str, source_files: List[str]):
         )
     except Exception as e:  # asyncio/loop-level failure
         logger.error(f"Podcast worker {job_id} failed: {e}")
-        result = {"status": "failed", "error": str(e)}
+        result = {"status": "failed", "error": get_friendly_error(e)}
 
     job = podcast_jobs.setdefault(job_id, {})
     job.update(result)
@@ -1326,10 +1381,8 @@ def _github_ingest_worker(notebook_id: str, repo_url: str, subpath: Optional[str
                 chunk_texts = [ct for ct, _, _ in chunks]
                 embeddings = rt.engine.embed_batch(chunk_texts)
 
-                doc_ids = []
-                for i, ((chunk_text, start_char, end_char), embedding) in enumerate(
-                    zip(chunks, embeddings)
-                ):
+                db_items = []
+                for i, (chunk_text, start_char, end_char) in enumerate(chunks):
                     metadata = json.dumps(
                         {
                             "source_file": filepath,
@@ -1342,16 +1395,18 @@ def _github_ingest_worker(notebook_id: str, repo_url: str, subpath: Optional[str
                             "github_repo": repo_url,
                         }
                     )
-                    doc_id = database.insert_document(rt.db_path, chunk_text, metadata)
-                    doc_ids.append(doc_id)
+                    db_items.append({"content": chunk_text, "metadata": metadata})
 
-                rt.engine.add_to_index(embeddings, doc_ids=doc_ids)
+                with _ingest_lock:
+                    doc_ids = database.insert_documents_batch(rt.db_path, db_items)
+                    rt.engine.add_to_index(embeddings, doc_ids=doc_ids)
                 total_chunks += len(chunks)
 
             except Exception as file_err:
                 logger.error(f"Error processing {filename}: {file_err}")
 
-        rt.engine.save()
+        with _ingest_lock:
+            rt.engine.save()
 
         github_ingest_status["is_ingesting"] = False
         github_ingest_status["message"] = (
