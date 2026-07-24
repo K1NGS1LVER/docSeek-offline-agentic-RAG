@@ -136,11 +136,16 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpe
 
       <div className="flex-1 overflow-y-auto p-2">
         {sources.length === 0 && pending.length === 0 ? (
-          <div className="flex flex-col items-center gap-4 px-6 py-16 text-center">
-            <FolderOpen className="w-6 h-6 text-text-muted" />
-            <p className="text-sm text-text-dim">
-              No sources yet. Add documents and every answer will be grounded in them.
-            </p>
+          <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
+            <div className="w-12 h-12 rounded-xl bg-accent-soft border border-accent/20 flex items-center justify-center">
+              <FolderOpen className="w-5 h-5 text-accent" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-text">No sources yet</p>
+              <p className="text-xs text-text-dim mt-1">
+                Add documents and every answer will be grounded in them.
+              </p>
+            </div>
             <Button icon={Plus} onClick={onAdd}>
               Add sources
             </Button>

@@ -52,7 +52,7 @@ export function Button({
     <button
       {...props}
       className={`inline-flex items-center justify-center gap-2 rounded-lg border text-sm font-medium
-        whitespace-nowrap transition-all
+        whitespace-nowrap transition-all active:scale-[0.97]
         disabled:bg-disabled disabled:text-disabled-fg disabled:border-transparent disabled:pointer-events-none
         ${BUTTON_SIZES[size]} ${BUTTON_VARIANTS[variant]} ${className}`}
     >
@@ -115,7 +115,7 @@ export function Chip({ icon: Icon, active = false, mono = false, children, class
     <button
       type="button"
       {...props}
-      className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full border transition-all
+      className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full border transition-all active:scale-[0.96]
         ${mono ? 'font-mono text-xs' : 'text-sm'}
         ${
           active
@@ -157,7 +157,7 @@ export function Modal({ title, onClose, children, wide = false }) {
           bg-surface border border-border-bright rounded-2xl shadow-2xl`}
       >
         <div className="flex items-center justify-between pt-6 px-6">
-          <h3 className="font-serif text-xl font-medium text-text">{title}</h3>
+          <h3 className="font-serif text-xl font-semibold text-text">{title}</h3>
           <IconButton icon={X} onClick={onClose} title="Close" />
         </div>
         <div className="p-6 space-y-4">{children}</div>
@@ -170,8 +170,8 @@ export function Modal({ title, onClose, children, wide = false }) {
 export function OpRow({ title, sub, danger = false, children }) {
   return (
     <div
-      className={`flex items-center justify-between gap-6 px-6 py-4 border rounded-xl ${
-        danger ? 'border-caution/30 bg-caution-soft' : 'border-border bg-panel'
+      className={`flex items-center justify-between gap-6 px-6 py-4 border rounded-xl transition-colors ${
+        danger ? 'border-caution/30 bg-caution-soft' : 'border-border bg-panel hover:bg-surface-2'
       }`}
     >
       <span className="min-w-0">

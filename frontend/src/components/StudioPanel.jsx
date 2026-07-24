@@ -9,7 +9,7 @@ function NoteCard({ note, onDelete }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div
-      className="group bg-panel border border-border rounded-xl p-4 cursor-pointer hover:border-border-bright transition-colors"
+      className="group bg-panel border border-border rounded-xl p-4 cursor-pointer hover:border-border-bright hover:-translate-y-px transition-all duration-200"
       onClick={() => setExpanded(!expanded)}
     >
       <div className="flex items-start justify-between gap-2">
@@ -82,9 +82,14 @@ function NotesTab({ notes, onAdd, onDelete }) {
       )}
 
       {notes.length === 0 && !drafting && (
-        <p className="text-sm text-text-muted text-center px-4 py-8">
-          Notes live here — save an answer from the chat or write your own.
-        </p>
+        <div className="text-center px-4 py-8">
+          <p className="text-sm text-text-muted">
+            Notes live here.
+          </p>
+          <p className="text-xs text-text-dim mt-1">
+            Save an answer from the chat or write your own.
+          </p>
+        </div>
       )}
       {notes.map((n) => (
         <NoteCard key={n.id} note={n} onDelete={onDelete} />
@@ -212,9 +217,10 @@ function AudioTab({ selectedSources }) {
       )}
 
       {podcasts.length === 0 && !generating ? (
-        <p className="text-sm text-text-muted text-center px-4 py-6">
-          No episodes yet — generate one from your sources above.
-        </p>
+        <div className="text-center px-4 py-6">
+          <p className="text-sm text-text-muted">No episodes yet.</p>
+          <p className="text-xs text-text-dim mt-1">Generate one from your sources above.</p>
+        </div>
       ) : (
         podcasts.map((ep) => <EpisodeCard key={ep.job_id} ep={ep} />)
       )}
@@ -384,7 +390,7 @@ function ChatTab({ questions }) {
     return (
       <div className="text-center py-12">
         <p className="text-sm text-text-muted">No questions yet.</p>
-        <p className="text-xs text-text-muted mt-1">Ask something to build a jump list here.</p>
+        <p className="text-xs text-text-dim mt-1">Ask something to build a jump list here.</p>
       </div>
     );
   }

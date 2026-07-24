@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400;1,500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap');
 @import './theme.css';
 
 /* Cascade order: base loses to Tailwind's theme/utilities layers
@@ -47,6 +47,20 @@ body::before {
   opacity: 0.14;
   pointer-events: none;
   z-index: 0;
+}
+
+/* Grain overlay for premium surface texture */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 200px 200px;
+  opacity: 0.025;
+  pointer-events: none;
+  z-index: 0;
+  mix-blend-mode: overlay;
 }
 
 /* Warm radial bloom — landing only */
@@ -227,6 +241,10 @@ select {
   transform: translateY(-1px);
 }
 
+.btn-primary:active {
+  transform: translateY(0) scale(0.98);
+}
+
 .btn-lg {
   height: var(--control-lg);
   padding: 0 24px;
@@ -251,6 +269,10 @@ select {
   color: var(--text-1);
   border-color: var(--border-2);
   background: var(--surface);
+}
+
+.btn-icon:active {
+  transform: scale(0.95);
 }
 
 /* ============================================================
@@ -301,6 +323,12 @@ select {
   align-items: center;
   gap: 8px;
 }
+
+/* ============================================================
+   TEXT UTILITIES
+   ============================================================ */
+.balance { text-wrap: balance; }
+.pretty { text-wrap: pretty; }
 
 /* ============================================================
    ANIMATIONS

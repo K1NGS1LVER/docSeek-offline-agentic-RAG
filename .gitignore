@@ -11,6 +11,7 @@ env/
 
 # Data & Persistence
 data/
+docs/
 *.db
 *.faiss
 *.log
@@ -22,6 +23,7 @@ data/
 
 # Local planning notes
 improvement.md
+button.md
 
 # Local agent instructions (not published)
 CLAUDE.md

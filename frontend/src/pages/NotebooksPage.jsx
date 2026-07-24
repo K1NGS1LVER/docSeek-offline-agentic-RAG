@@ -100,7 +100,7 @@ export default function NotebooksPage({ theme, setTheme }) {
       <main className="flex-1 w-full max-w-[1100px] mx-auto px-8 py-12">
         <div className="flex items-center justify-between gap-4 mb-8">
           <div>
-            <h1 className="font-serif text-2xl font-medium text-text">Notebooks</h1>
+            <h1 className="font-serif text-2xl font-medium text-text" style={{ textWrap: 'balance' }}>Notebooks</h1>
             <p className="text-sm text-text-dim mt-1">
               Pick a notebook to keep working, or start a new one.
             </p>
@@ -118,12 +118,20 @@ export default function NotebooksPage({ theme, setTheme }) {
           </div>
         ) : notebooks.length === 0 ? (
           <div className="flex flex-col items-center gap-4 py-24 text-center">
-            <NotebookPen className="w-8 h-8 text-text-muted" />
-            <p className="text-sm text-text-dim max-w-sm">
-              No notebooks yet. Create one to start uploading sources and asking questions.
-            </p>
+            <div className="w-16 h-16 rounded-2xl bg-accent-soft border border-accent/20 flex items-center justify-center">
+              <NotebookPen className="w-7 h-7 text-accent" />
+            </div>
+            <div>
+              <h2 className="font-serif text-xl font-medium text-text" style={{ textWrap: 'balance' }}>
+                Your first notebook
+              </h2>
+              <p className="text-sm text-text-dim mt-1 max-w-sm" style={{ textWrap: 'pretty' }}>
+                Upload documents, ask questions, generate audio overviews.
+                Everything stays on your machine.
+              </p>
+            </div>
             <Button icon={Plus} onClick={() => setCreating(true)}>
-              Create your first notebook
+              Create a notebook
             </Button>
           </div>
         ) : (

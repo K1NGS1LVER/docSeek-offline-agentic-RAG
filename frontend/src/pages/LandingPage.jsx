@@ -298,11 +298,12 @@ export default function LandingPage({ theme, setTheme }) {
                     <h1 style={{
                         fontFamily: 'var(--font-serif)', fontWeight: 400,
                         fontSize: 'clamp(40px, 4.6vw, 60px)', lineHeight: 1.08,
-                        letterSpacing: '-0.02em', margin: '24px 0 16px',
+                        letterSpacing: '-0.025em', margin: '24px 0 16px',
+                        textWrap: 'balance',
                     }}>
                         Ask your documents <em style={{ color: 'var(--accent)' }}>anything.</em>
                     </h1>
-                    <p style={{ fontSize: 'var(--fs-lg)', color: 'var(--text-2)', lineHeight: 1.7, maxWidth: 440, marginBottom: 24 }}>
+                    <p style={{ fontSize: 'var(--fs-lg)', color: 'var(--text-2)', lineHeight: 1.7, maxWidth: 440, marginBottom: 24, textWrap: 'pretty' }}>
                         Everything runs on your machine — retrieval, reranking, and answers.
                         No clouds. No leaks. Just your library, understood.
                     </p>

@@ -100,7 +100,7 @@ export default function NotebookCard({ notebook, onChanged }) {
   return (
     <>
       <Card
-        className="group relative flex flex-col gap-3 p-4 cursor-pointer hover:border-accent transition-colors"
+        className="group relative flex flex-col gap-3 p-4 cursor-pointer border-border hover:border-accent hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(217,119,6,0.08)] transition-all duration-200"
         onClick={() => navigate(`/app/${notebook.id}`)}
       >
         <div className="flex items-start justify-between gap-2">
@@ -127,7 +127,7 @@ export default function NotebookCard({ notebook, onChanged }) {
             />
           </div>
         </div>
-        <h3 className="font-serif text-lg font-medium text-text truncate">{notebook.name}</h3>
+        <h3 className="font-serif text-lg font-semibold text-text truncate">{notebook.name}</h3>
         <p className="font-mono text-2xs text-text-muted">
           {sourceCount} source{sourceCount === 1 ? '' : 's'} · {created}
         </p>

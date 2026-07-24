@@ -465,7 +465,7 @@ function ResultCard({ result, index }) {
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.05 }}
-      className="bg-surface border border-border rounded-xl p-6"
+      className="bg-surface border border-border rounded-xl p-6 hover:border-border-bright transition-colors"
     >
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
@@ -784,10 +784,10 @@ export default function ChatPanel({
           {messages.length === 0 && (
             <div className="flex-1 flex items-center justify-center py-16">
               <div className="text-center max-w-md">
-                <h2 className="font-serif text-2xl text-text mb-4">
+                <h2 className="font-serif text-2xl text-text mb-4" style={{ textWrap: 'balance' }}>
                   Ask your sources anything.
                 </h2>
-                <p className="text-sm text-text-dim leading-relaxed mb-6">
+                <p className="text-sm text-text-dim leading-relaxed mb-6" style={{ textWrap: 'pretty' }}>
                   <b className="text-text font-medium">Ask</b> streams an answer grounded in the
                   sources you selected — the agent plans, retrieves, and grades its own evidence.{' '}
                   <b className="text-text font-medium">Search</b> returns the raw matching chunks.{' '}
