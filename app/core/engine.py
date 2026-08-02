@@ -19,7 +19,11 @@ def get_shared_model() -> SentenceTransformer:
         with _model_lock:
             if _model is None:
                 logger.info(f"Loading model: {MODEL_NAME}...")
-                _model = SentenceTransformer(MODEL_NAME)
+                # ponytail: pass trust_remote_code=True for Nomic architecture support in sentence-transformers
+                try:
+                    _model = SentenceTransformer(MODEL_NAME, trust_remote_code=True)
+                except Exception:
+                    _model = SentenceTransformer(MODEL_NAME)
     return _model
 
 
@@ -40,13 +44,12 @@ class VectorEngine:
                 # Ensure the loaded index supports add_with_ids.
                 # Only IndexIDMap and IndexIDMap2 actually support it — the base
                 # class has the method signature but raises at runtime.
-                if isinstance(loaded_index, (faiss.IndexIDMap, faiss.IndexIDMap2)):
+                if isinstance(loaded_index, (faiss.IndexIDMap, faiss.IndexIDMap2)) and loaded_index.d == self.dimension:
                     self.index = loaded_index
                     logger.info(f"Index loaded OK ({self.index.ntotal} vectors, type: {type(loaded_index).__name__})")
                 else:
                     logger.warning(
-                        f"Loaded index is {type(loaded_index).__name__} "
-                        f"which doesn't support add_with_ids. "
+                        f"Loaded index dimension mismatch or type incompatibility ({getattr(loaded_index, 'd', 'unknown')} vs {self.dimension}). "
                         f"Creating a fresh IndexIDMap. Run POST /rebuild to re-index."
                     )
                     base_index = faiss.IndexFlatIP(self.dimension)
@@ -68,7 +71,9 @@ class VectorEngine:
     def embed(self, text: str) -> np.ndarray:
         """Generate normalized embedding for text"""
         try:
-            embedding = self.model.encode(text, convert_to_numpy=True)
+            # ponytail: add search_document: prefix if using Nomic v1.5 models for optimal vector retrieval accuracy
+            prepended = f"search_document: {text}" if "nomic" in MODEL_NAME.lower() else text
+            embedding = self.model.encode(prepended, convert_to_numpy=True)
             embedding = embedding.reshape(1, -1).astype("float32")
             faiss.normalize_L2(embedding)
             return embedding
@@ -82,7 +87,9 @@ class VectorEngine:
             return np.array([])
         
         try:
-            embeddings = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
+            # ponytail: add search_document: prefix batch-wide for Nomic v1.5 embedding models
+            prepended = [f"search_document: {t}" if "nomic" in MODEL_NAME.lower() else t for t in texts]
+            embeddings = self.model.encode(prepended, convert_to_numpy=True, show_progress_bar=False)
             embeddings = embeddings.astype("float32")
             faiss.normalize_L2(embeddings)
             return embeddings

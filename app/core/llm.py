@@ -8,6 +8,7 @@ Supports streaming for real-time response delivery.
 import json
 import logging
 import re
+from typing import Any
 # pyrefly: ignore [missing-import]
 from openai import AsyncOpenAI
 
@@ -48,14 +49,29 @@ class OllamaLLM:
         except Exception as e:
             logger.warning(f"LLM warmup skipped ({e}). Is Ollama running?")
 
-    async def complete_json(self, system: str, prompt: str, max_tokens: int = 400) -> dict | None:
-        """One-shot structured completion for agent decisions (plan/grade).
+    async def complete_json(
+        self,
+        system: str,
+        prompt: str,
+        max_tokens: int = 400,
+        schema: dict | None = None,
+    ) -> dict | None:
+        """One-shot structured completion for agent decisions (plan/grade/podcast).
 
         Asks the local model for a JSON object and parses it defensively:
-        small local models sometimes wrap JSON in prose or code fences, so we
-        extract the first {...} block if direct parsing fails. Returns None on
-        any failure — callers must fall back to heuristics.
+        if a schema is provided, uses response_format json_schema enforcement.
         """
+        # ponytail: pass json_schema specification when schema dict provided for strict Ollama/OpenAI structural guarantees
+        response_format: dict[str, Any] = {"type": "json_object"}
+        if schema:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": schema,
+                },
+            }
+
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -65,7 +81,7 @@ class OllamaLLM:
                 ],
                 temperature=0.0,
                 max_tokens=max_tokens,
-                response_format={"type": "json_object"},
+                response_format=response_format,
                 extra_body={"keep_alive": LLM_KEEP_ALIVE},
             )
             text = response.choices[0].message.content or ""

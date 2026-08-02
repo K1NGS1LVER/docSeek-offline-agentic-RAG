@@ -954,9 +954,11 @@ def _podcast_worker(job_id: str, notebook_id: str, source_files: List[str]):
 
     try:
         rt = get_runtime(notebook_id)
+        nb = notebooks.get_notebook(notebook_id)
+        nb_name = nb.get("name", "Notebook") if nb else "Notebook"
         result = asyncio.run(
             podcast.generate_podcast(
-                rt.db_path, audio_dir(notebook_id), job_id, source_files, on_progress
+                rt.db_path, audio_dir(notebook_id), job_id, source_files, notebook_name=nb_name, on_progress=on_progress
             )
         )
     except Exception as e:  # asyncio/loop-level failure
@@ -1267,6 +1269,17 @@ def view_document(
     """
 
     return html_response
+
+
+@app.get("/document/raw")
+def get_raw_document(notebook_id: str = Query(...), filename: str = Query(...)):
+    """Serve raw uploaded document file (e.g. PDF) for inline viewing."""
+    # ponytail: resolve file path strictly inside upload_dir to prevent path traversal attacks
+    safe_name, file_path = _safe_upload_path(filename, upload_dir(notebook_id))
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    media_type = "application/pdf" if filename.lower().endswith(".pdf") else "text/plain"
+    return FileResponse(file_path, media_type=media_type, filename=safe_name)
 
 
 # ============================================================================

@@ -391,3 +391,7 @@ export async function resetSystem(notebookId) {
 export function getDocumentViewUrl(notebookId, docId) {
   return `${BASE}/document/view?id=${encodeURIComponent(docId)}&notebook_id=${encodeURIComponent(notebookId)}`;
 }
+
+export function getRawDocumentUrl(notebookId, filename) {
+  return `${BASE}/document/raw?notebook_id=${encodeURIComponent(notebookId)}&filename=${encodeURIComponent(filename)}`;
+}

@@ -45,18 +45,24 @@ MAX_TALKING_POINTS = 5
 MAX_CONTEXT_CHARS = 6000
 GAP_SECONDS = 0.35  # silence inserted between spoken turns
 
+# ponytail: small local models fallback to pre-trained RAG/docSeek bias unless strictly constrained to source material
 OUTLINE_SYSTEM = """You are the producer of a two-host explainer podcast.
-Given source material, plan one short episode. Respond with ONLY a JSON object:
+Your task is to plan one short episode based STRICTLY and EXCLUSIVELY on the provided source material.
+Focus ONLY on the main topic, facts, and concepts present in the text.
+Do NOT mention RAG, docSeek, vector search, retrieval, or AI technology unless the source material is explicitly about those topics.
+
+Respond with ONLY a JSON object:
 {
-  "title": <a catchy, specific episode title, max 8 words>,
-  "talking_points": [<3 to 5 SHORT phrases (max 10 words each), one distinct topic each, in a sensible order>]
+  "title": <a catchy, specific episode title about the source material, max 8 words>,
+  "talking_points": [<3 to 5 SHORT phrases (max 10 words each), one distinct topic each from the source, in a sensible order>]
 }
 Keep the talking points terse -- they are section labels, not sentences."""
 
+# ponytail: enforce strict topic grounding in dialogue to prevent meta-topic leakage (RAG/docSeek)
 SCRIPT_SYSTEM = """You are scripting a lively two-host podcast about the provided source material.
 Host A is a curious guide who asks questions; Host B is the knowledgeable expert who explains.
 Write natural, conversational spoken dialogue for ONE talking point -- no headings, no stage directions, no markdown, just what each host says aloud.
-Ground every claim in the source material; do not invent facts.
+Ground every claim strictly in the source material. Do NOT introduce external concepts like RAG, docSeek, or AI retrieval unless present in the text.
 Respond with ONLY a JSON object:
 {
   "turns": [
@@ -70,6 +76,7 @@ Use 4 to 6 turns, alternating speakers, starting with A."""
 class PodcastState(TypedDict, total=False):
     job_id: str
     db_path: str
+    notebook_name: str  # ponytail: track notebook title for LLM domain anchoring
     audio_dir: Path
     source_files: List[str]
     context: str
@@ -82,12 +89,20 @@ class PodcastState(TypedDict, total=False):
 
 
 def _assemble_context(db_path: str, source_files: List[str]) -> str:
-    """Pull every chunk for the selected sources, ordered, and join into one
-    context block capped at MAX_CONTEXT_CHARS."""
-    ids = database.get_ids_for_sources(db_path, source_files)
-    if not ids:
-        return ""
-    docs = database.fetch_documents_by_ids(db_path, ids)
+    """Pull every chunk for the selected sources (or all chunks in the notebook DB if none selected),
+    ordered, and join into one context block capped at MAX_CONTEXT_CHARS."""
+    # ponytail: if source_files specified filter by them, otherwise fall back to all chunks in the notebook's DB
+    if source_files:
+        ids = database.get_ids_for_sources(db_path, source_files)
+        if not ids:
+            return ""
+        docs = database.fetch_documents_by_ids(db_path, ids)
+    else:
+        with database.get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, content, metadata FROM documents")
+            rows = cursor.fetchall()
+        docs = [{"id": row[0], "content": row[1], "metadata": row[2]} for row in rows]
 
     def _sort_key(d: Dict[str, Any]):
         meta = {}
@@ -133,9 +148,11 @@ class PodcastGraph:
             return {}
         writer = get_stream_writer()
         writer({"stage": "outline", "message": "Outlining the episode…", "progress": 20})
+        nb_name = state.get("notebook_name") or "Notebook"
+        # ponytail: prefix context with explicit notebook name to anchor LLM topic focus
         raw = await self.llm.complete_json(
             OUTLINE_SYSTEM,
-            f"Source material:\n{state['context']}",
+            f"Notebook Title/Topic: {nb_name}\n\nSource material for this notebook:\n{state['context']}",
             max_tokens=800,
         )
         if not isinstance(raw, dict):
@@ -160,6 +177,7 @@ class PodcastGraph:
             return {}
         writer = get_stream_writer()
         points = state["talking_points"]
+        nb_name = state.get("notebook_name") or "Notebook"
         turns: List[Dict[str, str]] = [
             {"speaker": "A", "text": f"Welcome to your audio overview: {state['title']}."}
         ]
@@ -169,9 +187,10 @@ class PodcastGraph:
                 "message": f"Writing segment {i + 1} of {len(points)}: {point}",
                 "progress": 25 + int(35 * (i / max(len(points), 1))),
             })
+            # ponytail: include notebook title in script generation prompt to keep turns on-topic
             raw = await self.llm.complete_json(
                 SCRIPT_SYSTEM,
-                f"Talking point: {point}\n\nSource material:\n{state['context']}",
+                f"Notebook Title/Topic: {nb_name}\nTalking point: {point}\n\nSource material for this notebook:\n{state['context']}",
                 max_tokens=1000,
             )
             if isinstance(raw, dict) and isinstance(raw.get("turns"), list):
@@ -256,6 +275,7 @@ class PodcastGraph:
         db_path: str,
         audio_dir: Path,
         source_files: List[str],
+        notebook_name: str = "Notebook",
         on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         """Drive the graph, forwarding node progress to on_progress; returns the
@@ -263,6 +283,7 @@ class PodcastGraph:
         initial: PodcastState = {
             "job_id": job_id,
             "db_path": db_path,
+            "notebook_name": notebook_name,
             "audio_dir": audio_dir,
             "source_files": source_files,
         }
@@ -282,6 +303,7 @@ async def generate_podcast(
     audio_dir: Path,
     job_id: str,
     source_files: List[str],
+    notebook_name: str = "Notebook",
     on_progress: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     """Generate one podcast episode end to end.
@@ -293,7 +315,7 @@ async def generate_podcast(
     llm = OllamaLLM()
     graph = PodcastGraph(llm)
     try:
-        state = await graph.run(job_id, db_path, audio_dir, source_files, on_progress)
+        state = await graph.run(job_id, db_path, audio_dir, source_files, notebook_name, on_progress)
     except Exception as e:  # unexpected failure -> clean error status
         logger.error(f"Podcast job {job_id} crashed: {e}", exc_info=True)
         return {"status": "failed", "error": str(e)}

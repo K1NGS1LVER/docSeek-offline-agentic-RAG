@@ -9,6 +9,7 @@ import ChatPanel from '../components/ChatPanel';
 import StudioPanel from '../components/StudioPanel';
 import AddSourcesModal from '../components/AddSourcesModal';
 import SettingsModal from '../components/SettingsModal';
+import PdfViewerModal from '../components/PdfViewerModal';
 
 const PANELS_KEY = 'ds_panels';
 // Must match SourcesPanel.jsx's w-72 / StudioPanel.jsx's w-80 (theme.css
@@ -54,6 +55,7 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
   const [autoOpenedAdd, setAutoOpenedAdd] = useState(false);
   const [notes, setNotes] = useState(() => loadNotes(notesKey(notebookId)));
   const [questions, setQuestions] = useState([]);
+  const [activePdf, setActivePdf] = useState(null);
 
   // Always-current notebookId for the persist effect below, so it can key its
   // localStorage write without listing notebookId as a dependency (which
@@ -148,6 +150,7 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
                 setUnchecked={setUnchecked}
                 onAdd={() => setAddOpen(true)}
                 dialogOpen={addOpen}
+                onOpenPdf={(filename) => setActivePdf(filename)}
               />
             </motion.div>
           )}
@@ -184,6 +187,13 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
       {addOpen && <AddSourcesModal onClose={() => setAddOpen(false)} />}
       {settingsOpen && (
         <SettingsModal theme={theme} setTheme={setTheme} onClose={() => setSettingsOpen(false)} />
+      )}
+      {activePdf && (
+        <PdfViewerModal
+          notebookId={notebookId}
+          filename={activePdf}
+          onClose={() => setActivePdf(null)}
+        />
       )}
     </div>
   );

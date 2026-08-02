@@ -13,7 +13,7 @@ function GithubMark({ className }) {
   );
 }
 
-function SourceRow({ source, checked, onToggle, onDeleted }) {
+function SourceRow({ source, checked, onToggle, onDeleted, onOpenPdf }) {
   const { notebookId } = useParams();
   const { addLog, refreshSources, refreshStats } = useSystem();
   const [confirming, setConfirming] = useState(false);
@@ -39,21 +39,32 @@ function SourceRow({ source, checked, onToggle, onDeleted }) {
     }
   };
 
+  const isPdf = (source.filename || '').toLowerCase().endsWith('.pdf');
   const Icon = source.github_repo ? GithubMark : FileText;
 
   return (
     <div className="group flex items-center gap-3 h-10 px-4 rounded-lg hover:bg-surface-2 transition-colors">
       <Checkbox checked={checked} onChange={onToggle} title="Include in retrieval" />
       <Icon className="w-3.5 h-3.5 text-accent flex-shrink-0" />
-      <a
-        href={source.first_chunk_id != null ? getDocumentViewUrl(notebookId, source.first_chunk_id) : undefined}
-        target="_blank"
-        rel="noopener noreferrer"
-        title={`${source.filename} — ${source.chunks} chunks (${source.chunking || 'unknown'} chunking)`}
-        className="flex-1 min-w-0 truncate text-sm text-text hover:text-accent transition-colors"
-      >
-        {source.filename}
-      </a>
+      {isPdf ? (
+        <button
+          onClick={() => onOpenPdf?.(source.filename)}
+          title={`${source.filename} — ${source.chunks} chunks (Click to view PDF)`}
+          className="flex-1 min-w-0 truncate text-left text-sm text-text hover:text-accent transition-colors cursor-pointer"
+        >
+          {source.filename}
+        </button>
+      ) : (
+        <a
+          href={source.first_chunk_id != null ? getDocumentViewUrl(notebookId, source.first_chunk_id) : undefined}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={`${source.filename} — ${source.chunks} chunks (${source.chunking || 'unknown'} chunking)`}
+          className="flex-1 min-w-0 truncate text-sm text-text hover:text-accent transition-colors"
+        >
+          {source.filename}
+        </a>
+      )}
       <span className="font-mono text-2xs text-text-muted group-hover:hidden">
         {source.chunks}
       </span>
@@ -98,7 +109,7 @@ function PendingRow({ item, onRetry, onDismiss }) {
   );
 }
 
-export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpen }) {
+export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpen, onOpenPdf }) {
   const { sources, ingestStatus, uploads, retryUpload, dismissUpload } = useSystem();
   const allChecked = unchecked.size === 0;
   const totalChunks = sources.reduce((acc, s) => acc + (s.chunks || 0), 0);
@@ -166,6 +177,7 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpe
                 source={s}
                 checked={!unchecked.has(s.source_file)}
                 onToggle={() => toggleOne(s.source_file)}
+                onOpenPdf={onOpenPdf}
                 onDeleted={(sf) =>
                   setUnchecked((prev) => {
                     const next = new Set(prev);

@@ -47,10 +47,9 @@ def audio_dir(nb_id: str) -> Path:
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
 
 # Settings
-MODEL_NAME = "all-mpnet-base-v2"
-EMBEDDING_DIM = 768  # Matches mpnet
-# MODEL_NAME = "all-MiniLM-L6-v2"
-# EMBEDDING_DIM = 384
+# ponytail: default to nomic-ai/nomic-embed-text-v1.5 for 8192 token context length (768 vector dimension)
+MODEL_NAME = os.environ.get("DOCSEEK_EMBED_MODEL", "nomic-ai/nomic-embed-text-v1.5")
+EMBEDDING_DIM = int(os.environ.get("DOCSEEK_EMBED_DIM", "768"))
 
 # Server settings
 HOST = "0.0.0.0"
