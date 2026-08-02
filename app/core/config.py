@@ -64,10 +64,11 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 # LLM Settings (Ollama). DOCSEEK_LLM_BASE_URL overrides for tests and
 # non-default Ollama setups.
 LLM_BASE_URL = os.environ.get("DOCSEEK_LLM_BASE_URL", "http://localhost:11434/v1")
-# phi3:mini is fine for planning/grading JSON, but too weak for podcast scripts
-# and research reports. Pull a stronger local model (e.g. `qwen3:8b` or
-# `llama3.1:8b`) and set DOCSEEK_LLM_MODEL to use it; nothing hard-depends on it.
-LLM_MODEL = os.environ.get("DOCSEEK_LLM_MODEL", "phi3:mini")
+# Recommended lightweight models for fast local agentic RAG & reliable JSON:
+#   - `qwen2.5:1.5b` or `qwen2.5:3b` (fastest response, highly reliable JSON parsing)
+#   - `granite3.1-dense:2b` (128k context, extremely low VRAM footprint)
+#   - `phi3:mini` (fallback, 3.8B parameters)
+LLM_MODEL = os.environ.get("DOCSEEK_LLM_MODEL", "qwen2.5:1.5b")
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 1024
 
