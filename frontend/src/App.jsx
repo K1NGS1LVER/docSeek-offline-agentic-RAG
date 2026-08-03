@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import LandingPage from './pages/LandingPage'
 import NotebooksPage from './pages/NotebooksPage'
 import Workspace from './pages/Workspace'
+import GraphPage from './pages/GraphPage'
 
 export default function App() {
   const [theme, setTheme] = useState(() => {
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/" element={<LandingPage theme={theme} setTheme={setTheme} />} />
         <Route path="/app" element={<NotebooksPage theme={theme} setTheme={setTheme} />} />
         <Route path="/app/:notebookId" element={<Workspace theme={theme} setTheme={setTheme} />} />
+        <Route path="/graph" element={<GraphPage />} />
         <Route path="*" element={<Navigate to="/app" replace />} />
       </Routes>
     </BrowserRouter>

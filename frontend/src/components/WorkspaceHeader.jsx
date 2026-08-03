@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { Sun, Moon, Settings, PanelLeft, PanelRight, ArrowLeft } from 'lucide-react';
+import { Sun, Moon, Settings, PanelLeft, PanelRight, ArrowLeft, Network } from 'lucide-react';
 import { useSystem } from '../lib/SystemContext';
 import { IconButton } from './ui';
 
@@ -37,6 +37,7 @@ export default function WorkspaceHeader({
       </Link>
 
       <IconButton icon={ArrowLeft} onClick={() => navigate('/app')} title="All notebooks" />
+      <IconButton icon={Network} onClick={() => navigate('/graph')} title="Knowledge Graph" />
 
       <div className="w-px h-4 bg-border-bright" />
 

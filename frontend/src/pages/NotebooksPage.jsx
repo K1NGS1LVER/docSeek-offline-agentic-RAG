@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Plus, Sun, Moon, Loader2, NotebookPen } from 'lucide-react';
+import { Plus, Sun, Moon, Loader2, NotebookPen, Network } from 'lucide-react';
 import { listNotebooks, createNotebook } from '../lib/api';
 import { Button, IconButton, Modal, SectionLabel, inputCls } from '../components/ui';
 import NotebookCard from '../components/NotebookCard';
@@ -89,6 +89,12 @@ export default function NotebooksPage({ theme, setTheme }) {
           doc<span className="text-accent">Seek</span>
         </Link>
         <div className="flex-1" />
+        <IconButton
+          size="md"
+          icon={Network}
+          onClick={() => navigate('/graph')}
+          title="Knowledge Graph"
+        />
         <IconButton
           size="md"
           icon={theme === 'light' ? Moon : Sun}
