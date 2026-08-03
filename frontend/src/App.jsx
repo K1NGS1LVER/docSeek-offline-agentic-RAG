@@ -21,8 +21,8 @@ export default function App() {
         <Route path="/" element={<LandingPage theme={theme} setTheme={setTheme} />} />
         <Route path="/app" element={<NotebooksPage theme={theme} setTheme={setTheme} />} />
         <Route path="/app/:notebookId" element={<Workspace theme={theme} setTheme={setTheme} />} />
-        <Route path="/app/:notebookId/graph" element={<GraphPage />} />
-        <Route path="/graph" element={<GraphPage />} />
+        <Route path="/app/:notebookId/graph" element={<GraphPage theme={theme} setTheme={setTheme} />} />
+        <Route path="/graph" element={<GraphPage theme={theme} setTheme={setTheme} />} />
         <Route path="*" element={<Navigate to="/app" replace />} />
       </Routes>
     </BrowserRouter>
