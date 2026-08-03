@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download, Copy, Check, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { search, ask, research, transcribe, streamSpeech, synthesizeSpeech, getDocumentViewUrl } from '../lib/api';
+import { search, ask, research, streamSpeech, synthesizeSpeech, getDocumentViewUrl, createDictationSocket } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
 import { Segmented, Chip, IconButton } from './ui';
 import ClearChatModal from './ClearChatModal';
@@ -185,63 +185,67 @@ function CopyButton({ text }) {
   );
 }
 
-/* ── Push-to-talk dictation button (local Whisper via /transcribe) ──── */
-function MicButton({ disabled, onText, onError }) {
+/* ── Push-to-talk streaming dictation button (local Whisper via WebSocket) ──── */
+function MicButton({ disabled, onStartDictation, onPartialText, onFinalText, onError }) {
   const [recording, setRecording] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
-  const recorderRef = useRef(null);
-  const chunksRef = useRef([]);
+  const [dictationHandle, setDictationHandle] = useState(null);
 
-  const stop = () => {
-    recorderRef.current?.stop();
+  const stop = useCallback(() => {
+    if (dictationHandle) {
+      dictationHandle.stop();
+      setDictationHandle(null);
+    }
     setRecording(false);
-  };
+  }, [dictationHandle]);
+
+  useEffect(() => {
+    return () => {
+      dictationHandle?.stop();
+    };
+  }, [dictationHandle]);
 
   const start = async () => {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       onError?.('Dictation is not supported in this browser.');
       return;
     }
-    let stream;
+
+    onStartDictation?.();
+
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch {
-      onError?.('Microphone access denied. Allow the mic to dictate.');
-      return;
+      setRecording(true);
+      const handle = await createDictationSocket(
+        (partialText) => {
+          onPartialText?.(partialText);
+        },
+        (finalText) => {
+          onFinalText?.(finalText);
+          setRecording(false);
+          setDictationHandle(null);
+        },
+        (err) => {
+          const errMsg = typeof err === 'string' ? err : err?.message || 'Dictation error';
+          onError?.(errMsg);
+          setRecording(false);
+          setDictationHandle(null);
+        }
+      );
+      setDictationHandle(handle);
+    } catch (err) {
+      const errMsg = err?.message || 'Failed to start dictation';
+      onError?.(errMsg);
+      setRecording(false);
+      setDictationHandle(null);
     }
-    const mr = new MediaRecorder(stream);
-    chunksRef.current = [];
-    mr.ondataavailable = (e) => {
-      if (e.data && e.data.size) chunksRef.current.push(e.data);
-    };
-    mr.onstop = async () => {
-      stream.getTracks().forEach((t) => t.stop());
-      const blob = new Blob(chunksRef.current, { type: mr.mimeType || 'audio/webm' });
-      if (!blob.size) return;
-      setTranscribing(true);
-      try {
-        const { data } = await transcribe(blob);
-        if (data.text?.trim()) onText(data.text.trim());
-        else onError?.('No speech detected — try again.');
-      } catch (err) {
-        onError?.(err.message || 'Transcription failed.');
-      } finally {
-        setTranscribing(false);
-      }
-    };
-    mr.start();
-    recorderRef.current = mr;
-    setRecording(true);
   };
 
-  const busy = transcribing;
-  const label = recording ? 'Stop recording' : busy ? 'Transcribing…' : 'Dictate (local speech-to-text)';
+  const label = recording ? 'Stop recording' : 'Dictate (streaming speech-to-text)';
 
   return (
     <button
       type="button"
       onClick={recording ? stop : start}
-      disabled={disabled || busy}
+      disabled={disabled}
       title={label}
       aria-label={label}
       className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 transition-all disabled:text-disabled-fg disabled:pointer-events-none ${
@@ -250,9 +254,7 @@ function MicButton({ disabled, onText, onError }) {
           : 'text-text-muted hover:text-accent hover:bg-panel'
       }`}
     >
-      {busy ? (
-        <Loader2 className="w-4 h-4 animate-spin" />
-      ) : recording ? (
+      {recording ? (
         <Square className="w-3.5 h-3.5 fill-current animate-pulse" />
       ) : (
         <Mic className="w-4 h-4" />
@@ -544,6 +546,7 @@ export default function ChatPanel({
   // the notebook changes mid-stream, so a stale response can never mutate or
   // persist another notebook's thread.
   const reqSeqRef = useRef(0);
+  const baseInputRef = useRef('');
 
   // Load (or swap) this notebook's chat thread whenever notebookId changes,
   // including on mount.
@@ -961,13 +964,21 @@ export default function ChatPanel({
           </select>
           <MicButton
             disabled={isSearching || !canType}
-            onText={(text) => {
+            onStartDictation={() => {
               setMicError('');
-              setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+              baseInputRef.current = input.trim();
+            }}
+            onPartialText={(text) => {
+              const base = baseInputRef.current;
+              setInput(base ? `${base} ${text}` : text);
+            }}
+            onFinalText={(text) => {
+              const base = baseInputRef.current;
+              setInput(base ? `${base} ${text}` : text);
             }}
             onError={(msg) => {
               setMicError(msg);
-              addLog(`Dictation: ${msg}`, 'ERROR');
+              if (msg) addLog(`Dictation: ${msg}`, 'ERROR');
             }}
           />
           <button
