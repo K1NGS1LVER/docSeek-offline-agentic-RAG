@@ -1,7 +1,7 @@
 import json
 import math
 from typing import List, Dict, Any, Optional
-from app.core.database import list_sources, fetch_chunks_by_source
+from app.core.database import list_sources, fetch_chunks_for_graph_node
 
 
 def compute_cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
@@ -31,9 +31,9 @@ def build_graph_data(
 
     for src in sources:
         source_file = src["source_file"]
-        chunks = fetch_chunks_by_source(db_path, source_file)
-        chunk_count = len(chunks)
         first_chunk_id = src.get("first_chunk_id")
+        chunks = fetch_chunks_for_graph_node(db_path, source_file, first_chunk_id)
+        chunk_count = len(chunks)
 
         # Parse tags from metadata
         tags = []

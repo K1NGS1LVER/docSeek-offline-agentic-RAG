@@ -190,6 +190,30 @@ def fetch_chunks_by_source(db_path: str, source_file: str) -> List[Dict[str, Any
         rows = cursor.fetchall()
     return [{"id": row[0], "content": row[1], "metadata": row[2]} for row in rows]
 
+def fetch_chunks_for_graph_node(
+    db_path: str, source_file: str, first_chunk_id: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Fetch chunks for a graph node. Uses source_file match first; falls back to first_chunk_id group."""
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        # Try by source_file column first (real path)
+        cursor.execute(
+            "SELECT id, content, metadata FROM documents WHERE source_file = ?",
+            (source_file,),
+        )
+        rows = cursor.fetchall()
+        if rows:
+            return [{"id": r[0], "content": r[1], "metadata": r[2]} for r in rows]
+        # Fallback: if source_file is a synthesized name, try fetching the specific chunk by first_chunk_id
+        if first_chunk_id is not None:
+            cursor.execute(
+                "SELECT id, content, metadata FROM documents WHERE id = ?",
+                (first_chunk_id,),
+            )
+            rows = cursor.fetchall()
+            return [{"id": r[0], "content": r[1], "metadata": r[2]} for r in rows]
+    return []
+
 def get_ids_for_sources(db_path: str, source_files: List[str]) -> List[int]:
     """All chunk ids belonging to the given sources.
 

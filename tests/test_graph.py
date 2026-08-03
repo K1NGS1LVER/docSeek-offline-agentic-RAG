@@ -24,7 +24,7 @@ def test_compute_cosine_similarity():
 
 
 @patch("app.core.graph.list_sources")
-@patch("app.core.graph.fetch_chunks_by_source")
+@patch("app.core.graph.fetch_chunks_for_graph_node")
 def test_build_graph_data_empty(mock_fetch_chunks, mock_list_sources):
     mock_list_sources.return_value = []
     data = build_graph_data("dummy.db", min_similarity=0.3)
@@ -35,7 +35,7 @@ def test_build_graph_data_empty(mock_fetch_chunks, mock_list_sources):
 
 
 @patch("app.core.graph.list_sources")
-@patch("app.core.graph.fetch_chunks_by_source")
+@patch("app.core.graph.fetch_chunks_for_graph_node")
 def test_build_graph_data_nodes_and_edges(mock_fetch_chunks, mock_list_sources):
     mock_list_sources.return_value = [
         {
@@ -58,7 +58,7 @@ def test_build_graph_data_nodes_and_edges(mock_fetch_chunks, mock_list_sources):
         },
     ]
 
-    def side_effect(db_path, source_file):
+    def side_effect(db_path, source_file, first_chunk_id=None):
         if source_file == "docs/a.txt":
             return [{"id": 1, "content": "a1"}, {"id": 2, "content": "a2"}]
         elif source_file == "docs/b.txt":
@@ -143,4 +143,30 @@ def test_list_sources_metadata_fallback(tmp_path):
     assert "Notebook Note" in src_names
     assert "Document #4" in src_names
     assert len(sources) == 4
+
+
+def test_fetch_chunks_for_graph_node(tmp_path):
+    db_file = str(tmp_path / "test_fallback.db")
+    database.init_db(db_file)
+
+    # Insert document with real source_file
+    id1 = database.insert_document(db_file, "real file content", metadata=json.dumps({"source_file": "real.txt"}))
+    # Insert document without source_file (synthesized source path case)
+    id2 = database.insert_document(db_file, "synthesized content", metadata=None)
+
+    # 1. Matches real source_file
+    chunks1 = database.fetch_chunks_for_graph_node(db_file, "real.txt", first_chunk_id=id1)
+    assert len(chunks1) == 1
+    assert chunks1[0]["id"] == id1
+
+    # 2. Synthesized source path fails source_file match, falls back to first_chunk_id
+    chunks2 = database.fetch_chunks_for_graph_node(db_file, "Document #2", first_chunk_id=id2)
+    assert len(chunks2) == 1
+    assert chunks2[0]["id"] == id2
+    assert chunks2[0]["content"] == "synthesized content"
+
+    # 3. Non-existent source path without first_chunk_id returns []
+    chunks3 = database.fetch_chunks_for_graph_node(db_file, "missing.txt", first_chunk_id=None)
+    assert chunks3 == []
+
 
