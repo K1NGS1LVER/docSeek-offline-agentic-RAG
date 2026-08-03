@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Share2 } from 'lucide-react';
 
 // Helper to read current theme colors from CSS variables or theme prop
@@ -24,6 +24,11 @@ const getThemePalette = (theme) => {
   };
 };
 
+const getNodeRadius = (node) => {
+  if (node?.is_tag) return 8;
+  return 6 + Math.sqrt(node?.chunk_count || 1) * 2;
+};
+
 export default function GraphCanvas({
   nodes = [],
   edges = [],
@@ -36,10 +41,59 @@ export default function GraphCanvas({
   const containerRef = useRef(null);
   const [hoveredNode, setHoveredNode] = useState(null);
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 1 });
+  const cameraRef = useRef(camera);
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const hasDraggedRef = useRef(false);
   const positionsRef = useRef(new Map());
+
+  // Keep cameraRef in sync with camera state
+  useEffect(() => {
+    cameraRef.current = camera;
+  }, [camera]);
+
+  // Fit graph nodes to screen viewport
+  const fitToScreen = useCallback(() => {
+    const container = containerRef.current;
+    if (!container || nodes.length === 0) return;
+    const width = container.clientWidth || 800;
+    const height = container.clientHeight || 600;
+
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+
+    nodes.forEach((node) => {
+      const p = positionsRef.current.get(node.id);
+      if (p) {
+        minX = Math.min(minX, p.x);
+        maxX = Math.max(maxX, p.x);
+        minY = Math.min(minY, p.y);
+        maxY = Math.max(maxY, p.y);
+      }
+    });
+
+    if (minX === Infinity) return;
+
+    const graphWidth = maxX - minX;
+    const graphHeight = maxY - minY;
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+    const padding = 100;
+    const scaleX = (width - padding) / (graphWidth || 100);
+    const scaleY = (height - padding) / (graphHeight || 100);
+    const nextZoom = Math.max(0.35, Math.min(1.8, Math.min(scaleX, scaleY)));
+
+    const nextCamera = {
+      zoom: nextZoom,
+      x: width / 2 - centerX * nextZoom,
+      y: height / 2 - centerY * nextZoom
+    };
+    cameraRef.current = nextCamera;
+    requestAnimationFrame(() => {
+      setCamera(nextCamera);
+    });
+  }, [nodes]);
 
   // Initialize/update particle positions around container center
   useEffect(() => {
@@ -59,7 +113,20 @@ export default function GraphCanvas({
         });
       }
     });
-  }, [nodes]);
+
+    if (nodes.length > 0) {
+      fitToScreen();
+    }
+  }, [nodes, fitToScreen]);
+
+  // Window resize handler for viewport auto-fitting
+  useEffect(() => {
+    const handleResize = () => {
+      fitToScreen();
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [fitToScreen]);
 
   // Non-passive wheel event listener for zooming
   useEffect(() => {
@@ -78,11 +145,13 @@ export default function GraphCanvas({
         const nextZoom = Math.max(0.15, Math.min(4, prev.zoom * zoomFactor));
         const mouseWorldX = (mouseX - prev.x) / prev.zoom;
         const mouseWorldY = (mouseY - prev.y) / prev.zoom;
-        return {
+        const nextCam = {
           zoom: nextZoom,
           x: mouseX - mouseWorldX * nextZoom,
           y: mouseY - mouseWorldY * nextZoom
         };
+        cameraRef.current = nextCam;
+        return nextCam;
       });
     };
 
@@ -149,6 +218,31 @@ export default function GraphCanvas({
         pB.vy -= (dy / dist) * springForce;
       });
 
+      // Collision pushing physics ticks
+      nodes.forEach((nodeA) => {
+        const pA = posMap.get(nodeA.id);
+        if (!pA) return;
+        const rA = getNodeRadius(nodeA);
+
+        nodes.forEach((nodeB) => {
+          if (nodeA.id === nodeB.id) return;
+          const pB = posMap.get(nodeB.id);
+          if (!pB) return;
+          const rB = getNodeRadius(nodeB);
+
+          const dx = pA.x - pB.x;
+          const dy = pA.y - pB.y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
+          const minDist = rA + rB + 40; // visual radii + padding safety margin
+          if (dist < minDist) {
+            const overlap = minDist - dist;
+            const force = overlap * 0.15; // strong push force
+            pA.vx += (dx / dist) * force;
+            pA.vy += (dy / dist) * force;
+          }
+        });
+      });
+
       // Position update & friction
       nodes.forEach((node) => {
         const p = posMap.get(node.id);
@@ -164,8 +258,9 @@ export default function GraphCanvas({
       ctx.fillRect(0, 0, width, height);
 
       ctx.save();
-      ctx.translate(camera.x, camera.y);
-      ctx.scale(camera.zoom, camera.zoom);
+      const currentCam = cameraRef.current;
+      ctx.translate(currentCam.x, currentCam.y);
+      ctx.scale(currentCam.zoom, currentCam.zoom);
 
       // Draw Edges
       edges.forEach((edge) => {
@@ -200,7 +295,7 @@ export default function GraphCanvas({
         const isMatched =
           searchQuery && node.label?.toLowerCase().includes(searchQuery.toLowerCase());
         const isTag = Boolean(node.is_tag);
-        const radius = Math.max(5, Math.min(12, (node.chunk_count || 1) * 0.8));
+        const radius = getNodeRadius(node);
 
         // Outer Glow
         ctx.beginPath();
@@ -239,32 +334,36 @@ export default function GraphCanvas({
 
     render();
     return () => cancelAnimationFrame(animId);
-  }, [nodes, edges, repulsion, camera, hoveredNode, searchQuery, theme]);
+  }, [nodes, edges, repulsion, hoveredNode, searchQuery, theme]);
 
   const handleMouseDown = (e) => {
     isDraggingRef.current = true;
-    dragStartRef.current = { x: e.clientX - camera.x, y: e.clientY - camera.y };
+    const currentCam = cameraRef.current;
+    dragStartRef.current = { x: e.clientX - currentCam.x, y: e.clientY - currentCam.y };
     hasDraggedRef.current = false;
   };
 
   const handleMouseMove = (e) => {
+    const currentCam = cameraRef.current;
     if (isDraggingRef.current) {
-      const dx = e.clientX - dragStartRef.current.x - camera.x;
-      const dy = e.clientY - dragStartRef.current.y - camera.y;
+      const dx = e.clientX - dragStartRef.current.x - currentCam.x;
+      const dy = e.clientY - dragStartRef.current.y - currentCam.y;
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
         hasDraggedRef.current = true;
       }
-      setCamera((prev) => ({
-        ...prev,
+      const nextCam = {
+        ...currentCam,
         x: e.clientX - dragStartRef.current.x,
         y: e.clientY - dragStartRef.current.y
-      }));
+      };
+      setCamera(nextCam);
+      cameraRef.current = nextCam;
     } else {
       const container = containerRef.current;
       if (!container) return;
       const rect = container.getBoundingClientRect();
-      const mouseX = (e.clientX - rect.left - camera.x) / camera.zoom;
-      const mouseY = (e.clientY - rect.top - camera.y) / camera.zoom;
+      const mouseX = (e.clientX - rect.left - currentCam.x) / currentCam.zoom;
+      const mouseY = (e.clientY - rect.top - currentCam.y) / currentCam.zoom;
 
       let found = null;
       let minDistance = Infinity;
@@ -275,7 +374,7 @@ export default function GraphCanvas({
         const dx = mouseX - p.x;
         const dy = mouseY - p.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        const radius = Math.max(5, Math.min(12, (node.chunk_count || 1) * 0.8));
+        const radius = getNodeRadius(node);
         const maxHitRadius = Math.max(12, radius);
         if (dist <= maxHitRadius && dist < minDistance) {
           minDistance = dist;
@@ -294,8 +393,9 @@ export default function GraphCanvas({
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
-    const mouseX = (e.clientX - rect.left - camera.x) / camera.zoom;
-    const mouseY = (e.clientY - rect.top - camera.y) / camera.zoom;
+    const currentCam = cameraRef.current;
+    const mouseX = (e.clientX - rect.left - currentCam.x) / currentCam.zoom;
+    const mouseY = (e.clientY - rect.top - currentCam.y) / currentCam.zoom;
 
     let closestNode = null;
     let minDistance = Infinity;
@@ -306,7 +406,7 @@ export default function GraphCanvas({
       const dx = mouseX - p.x;
       const dy = mouseY - p.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      const radius = Math.max(5, Math.min(12, (node.chunk_count || 1) * 0.8));
+      const radius = getNodeRadius(node);
       const maxHitRadius = Math.max(12, radius);
       if (dist <= maxHitRadius && dist < minDistance) {
         minDistance = dist;
@@ -350,4 +450,3 @@ export default function GraphCanvas({
     </div>
   );
 }
-
