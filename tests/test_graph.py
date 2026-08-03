@@ -2,10 +2,9 @@ import json
 import pytest
 import numpy as np
 from unittest.mock import patch, MagicMock
-from app.core.graph import compute_cosine_similarity, build_graph_data
+from app.core.graph import compute_cosine_similarity, build_graph_data, parse_explicit_references
 from app.core.engine import VectorEngine
 from app.core import database
-
 
 
 def test_compute_cosine_similarity():
@@ -21,6 +20,32 @@ def test_compute_cosine_similarity():
     assert compute_cosine_similarity(v1, v_zero) == 0.0
     assert compute_cosine_similarity([], v1) == 0.0
     assert compute_cosine_similarity([1.0, 2.0], [1.0, 2.0, 3.0]) == 0.0
+
+
+def test_parse_explicit_references():
+    doc_targets = [
+        {"id": "docs/setup.md"},
+        {"id": "notes/architecture.pdf"},
+    ]
+    # 1. Wiki-link test
+    content_wiki = "For setup, check [[setup]] or [[setup.md]] in the docs."
+    refs_wiki = parse_explicit_references(content_wiki, doc_targets)
+    assert refs_wiki == ["docs/setup.md"]
+
+    # 2. Markdown link test
+    content_md = "See the [Architecture Diagram](notes/architecture.pdf) for details."
+    refs_md = parse_explicit_references(content_md, doc_targets)
+    assert refs_md == ["notes/architecture.pdf"]
+
+    # 3. Literal filename mention test
+    content_filename = "Please view setup.md for installation instructions."
+    refs_filename = parse_explicit_references(content_filename, doc_targets)
+    assert refs_filename == ["docs/setup.md"]
+
+    # 4. No matches
+    content_none = "This text has no references or links."
+    refs_none = parse_explicit_references(content_none, doc_targets)
+    assert refs_none == []
 
 
 @patch("app.core.graph.list_sources")
@@ -62,7 +87,7 @@ def test_build_graph_data_nodes_and_edges(mock_fetch_chunks, mock_list_sources):
         if source_file == "docs/a.txt":
             return [{"id": 1, "content": "a1"}, {"id": 2, "content": "a2"}]
         elif source_file == "docs/b.txt":
-            return [{"id": 3, "content": "b1"}]
+            return [{"id": 3, "content": "b1 [[c.txt]]"}]
         elif source_file == "docs/c.txt":
             return [{"id": 4, "content": "c1"}]
         return []
@@ -82,31 +107,48 @@ def test_build_graph_data_nodes_and_edges(mock_fetch_chunks, mock_list_sources):
 
     data = build_graph_data("dummy.db", min_similarity=0.5, chunk_embeddings_map=chunk_embeddings_map)
 
-    assert len(data["nodes"]) == 3
-    node_ids = [n["id"] for n in data["nodes"]]
-    assert "docs/a.txt" in node_ids
-    assert "docs/b.txt" in node_ids
-    assert "docs/c.txt" in node_ids
+    # 3 document nodes + 3 tag nodes (ai, python, web) = 6 nodes
+    assert len(data["nodes"]) == 6
+    doc_nodes = [n for n in data["nodes"] if not n.get("is_tag")]
+    tag_nodes = [n for n in data["nodes"] if n.get("is_tag")]
 
-    # Edge check:
-    # a.txt <-> b.txt similarity is high (~0.99) -> similarity edge
-    # b.txt <-> c.txt similarity is low (0.1 / norm), but both share tag "web" -> tag edge
+    assert len(doc_nodes) == 3
+    assert len(tag_nodes) == 3
+
+    doc_ids = [n["id"] for n in doc_nodes]
+    assert "docs/a.txt" in doc_ids
+    assert "docs/b.txt" in doc_ids
+    assert "docs/c.txt" in doc_ids
+
+    tag_ids = [n["id"] for n in tag_nodes]
+    assert "tag:ai" in tag_ids
+    assert "tag:python" in tag_ids
+    assert "tag:web" in tag_ids
+
+    # Edges:
     edges = data["edges"]
-    assert len(edges) >= 2
-
     sim_edges = [e for e in edges if e["type"] == "similarity"]
     tag_edges = [e for e in edges if e["type"] == "tag"]
+    ref_edges = [e for e in edges if e["type"] == "reference"]
 
-    assert any(
-        (e["source"] == "docs/a.txt" and e["target"] == "docs/b.txt") or
-        (e["source"] == "docs/b.txt" and e["target"] == "docs/a.txt")
-        for e in sim_edges
+    # Tag edges: a.txt connected to python & ai; b.txt connected to python & web; c.txt connected to web
+    assert len(tag_edges) == 5
+    assert any(e["source"] == "docs/a.txt" and e["target"] == "tag:python" for e in tag_edges)
+    assert any(e["source"] == "docs/a.txt" and e["target"] == "tag:ai" for e in tag_edges)
+    assert any(e["source"] == "docs/b.txt" and e["target"] == "tag:python" for e in tag_edges)
+
+    # Reference edge: b.txt content contains [[c.txt]] -> b.txt connected to c.txt
+    assert len(ref_edges) == 1
+    assert ref_edges[0]["source"] == "docs/b.txt"
+    assert ref_edges[0]["target"] == "docs/c.txt"
+
+    # Similarity edge: a.txt <-> b.txt
+    assert len(sim_edges) == 1
+    assert (
+        (sim_edges[0]["source"] == "docs/a.txt" and sim_edges[0]["target"] == "docs/b.txt") or
+        (sim_edges[0]["source"] == "docs/b.txt" and sim_edges[0]["target"] == "docs/a.txt")
     )
-    assert any(
-        (e["source"] == "docs/b.txt" and e["target"] == "docs/c.txt") or
-        (e["source"] == "docs/c.txt" and e["target"] == "docs/b.txt")
-        for e in tag_edges
-    )
+
     assert data["stats"]["total_documents"] == 3
     assert data["stats"]["total_edges"] == len(edges)
 
@@ -168,5 +210,3 @@ def test_fetch_chunks_for_graph_node(tmp_path):
     # 3. Non-existent source path without first_chunk_id returns []
     chunks3 = database.fetch_chunks_for_graph_node(db_file, "missing.txt", first_chunk_id=None)
     assert chunks3 == []
-
-
