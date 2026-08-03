@@ -175,7 +175,7 @@ export async function createDictationSocket(onPartial, onFinal, onError) {
     }
   };
 
-  ws.onerror = (err) => {
+  ws.onerror = () => {
     if (onError) onError('WebSocket connection error');
   };
 

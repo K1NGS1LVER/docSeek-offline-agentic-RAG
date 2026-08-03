@@ -188,7 +188,6 @@ function CopyButton({ text }) {
 /* ── Push-to-talk streaming dictation button (local Whisper via WebSocket) ──── */
 function MicButton({ disabled, onStartDictation, onPartialText, onFinalText, onError }) {
   const [recording, setRecording] = useState(false);
-  const [dictationHandle, setDictationHandle] = useState(null);
   const recordingRef = useRef(false);
   const dictationHandleRef = useRef(null);
 
@@ -197,7 +196,6 @@ function MicButton({ disabled, onStartDictation, onPartialText, onFinalText, onE
     if (dictationHandleRef.current) {
       dictationHandleRef.current.stop();
       dictationHandleRef.current = null;
-      setDictationHandle(null);
     }
     setRecording(false);
   }, []);
@@ -233,7 +231,6 @@ function MicButton({ disabled, onStartDictation, onPartialText, onFinalText, onE
             dictationHandleRef.current = null;
             onFinalText?.(finalText);
             setRecording(false);
-            setDictationHandle(null);
           }
         },
         (err) => {
@@ -242,7 +239,6 @@ function MicButton({ disabled, onStartDictation, onPartialText, onFinalText, onE
           const errMsg = typeof err === 'string' ? err : err?.message || 'Dictation error';
           onError?.(errMsg);
           setRecording(false);
-          setDictationHandle(null);
         }
       );
 
@@ -252,14 +248,12 @@ function MicButton({ disabled, onStartDictation, onPartialText, onFinalText, onE
       }
 
       dictationHandleRef.current = handle;
-      setDictationHandle(handle);
     } catch (err) {
       recordingRef.current = false;
       dictationHandleRef.current = null;
       const errMsg = err?.message || 'Failed to start dictation';
       onError?.(errMsg);
       setRecording(false);
-      setDictationHandle(null);
     }
   };
 
