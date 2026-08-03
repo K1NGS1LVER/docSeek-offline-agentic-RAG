@@ -71,6 +71,17 @@ export async function getIngestStatus(notebookId) {
   return request(`/ingest/status?notebook_id=${encodeURIComponent(notebookId)}`);
 }
 
+/* ── Knowledge Graph ─────────────────────────────────── */
+
+export async function getGraphData(minSimilarity = 0.3, notebookId = null) {
+  let path = `/graph/data?min_similarity=${encodeURIComponent(minSimilarity)}`;
+  if (notebookId) {
+    path += `&notebook_id=${encodeURIComponent(notebookId)}`;
+  }
+  return request(path);
+}
+
+
 /* ── Document Ingestion ──────────────────────────────── */
 
 export async function uploadFile(notebookId, file, chunkingStrategy = null) {
