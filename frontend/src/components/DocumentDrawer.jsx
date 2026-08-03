@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, FileText, Tag, Share2, Database } from 'lucide-react';
+import { X, FileText, Tag, Share2, Database, Link as LinkIcon, Sparkles } from 'lucide-react';
 
 export default function DocumentDrawer({ node, onClose, edges = [] }) {
   if (!node) return null;
@@ -11,21 +11,37 @@ export default function DocumentDrawer({ node, onClose, edges = [] }) {
     (e) => getId(e.source) === node.id || getId(e.target) === node.id
   );
 
+  const referenceEdges = connectedEdges.filter((e) => e.type === 'reference');
+  const tagEdges = connectedEdges.filter((e) => e.type === 'tag');
+  const similarityEdges = connectedEdges.filter((e) => e.type === 'similarity' || !e.type);
+
+  const getNeighborName = (edge) => {
+    const rawNeighborId = getId(edge.source) === node.id ? getId(edge.target) : getId(edge.source);
+    const neighborIdStr = typeof rawNeighborId === 'string' ? rawNeighborId : String(rawNeighborId || '');
+    if (neighborIdStr.startsWith('tag:')) {
+      return `#${neighborIdStr.slice(4)}`;
+    }
+    return neighborIdStr.split('/').pop() || neighborIdStr;
+  };
+
+  const isTagNode = Boolean(node.is_tag);
+  const HeaderIcon = isTagNode ? Tag : FileText;
+
   return (
-    <div className="absolute top-14 right-0 z-20 w-96 h-[calc(100vh-56px)] bg-surface/95 backdrop-blur-xl border-l border-border p-6 text-text shadow-2xl flex flex-col justify-between transition-all duration-300">
+    <div className="absolute top-0 right-0 z-20 w-96 h-full bg-surface/95 backdrop-blur-xl border-l border-border p-6 text-text shadow-2xl flex flex-col justify-between transition-all duration-300">
       <div className="space-y-6 overflow-y-auto pr-1">
         {/* Header */}
         <div className="flex items-start justify-between border-b border-border pb-4">
           <div className="flex items-center gap-3">
             <div className="p-2 bg-accent-soft border border-accent/20 rounded-xl text-accent">
-              <FileText className="w-5 h-5" />
+              <HeaderIcon className="w-5 h-5" />
             </div>
             <div>
               <h3 className="font-serif font-medium text-text text-sm truncate max-w-[200px]" title={node.label}>
                 {node.label}
               </h3>
               <p className="text-2xs text-text-dim truncate max-w-[200px] font-mono">
-                {node.source_file}
+                {isTagNode ? 'Tag Hub' : (node.source_file || 'Document')}
               </p>
             </div>
           </div>
@@ -45,7 +61,7 @@ export default function DocumentDrawer({ node, onClose, edges = [] }) {
               <Database className="w-3.5 h-3.5 text-accent" />
               <span>Chunks</span>
             </div>
-            <p className="text-lg font-semibold text-text font-mono">{node.chunk_count}</p>
+            <p className="text-lg font-semibold text-text font-mono">{node.chunk_count ?? 0}</p>
           </div>
           <div className="bg-surface-2 border border-border rounded-xl p-3 space-y-1">
             <div className="flex items-center gap-1.5 text-text-dim text-[11px]">
@@ -57,57 +73,125 @@ export default function DocumentDrawer({ node, onClose, edges = [] }) {
         </div>
 
         {/* Tags */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-1.5 text-xs text-text-dim">
-            <Tag className="w-3.5 h-3.5 text-accent" />
-            <span>Tags</span>
+        {!isTagNode && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5 text-xs text-text-dim">
+              <Tag className="w-3.5 h-3.5 text-accent" />
+              <span>Tags</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {node.tags && node.tags.length > 0 ? (
+                node.tags.map((tag, i) => (
+                  <span
+                    key={i}
+                    className="px-2 py-0.5 bg-surface-2 border border-border rounded-md text-[11px] text-text-dim font-mono"
+                  >
+                    #{tag}
+                  </span>
+                ))
+              ) : (
+                <span className="text-xs text-text-dim italic">No tags assigned</span>
+              )}
+            </div>
           </div>
-          <div className="flex flex-wrap gap-1.5">
-            {node.tags && node.tags.length > 0 ? (
-              node.tags.map((tag, i) => (
-                <span
-                  key={i}
-                  className="px-2 py-0.5 bg-surface-2 border border-border rounded-md text-[11px] text-text-dim font-mono"
-                >
-                  #{tag}
-                </span>
-              ))
-            ) : (
-              <span className="text-xs text-text-dim italic">No tags assigned</span>
-            )}
-          </div>
-        </div>
+        )}
 
-        {/* Connected Documents */}
-        <div className="space-y-2">
-          <h4 className="text-xs font-serif font-medium text-text border-b border-border pb-1">
-            Semantic Neighbors
-          </h4>
-          <div className="space-y-1.5">
-            {connectedEdges.length > 0 ? (
-              connectedEdges.map((edge, i) => {
-                const rawNeighborId = getId(edge.source) === node.id ? getId(edge.target) : getId(edge.source);
-                const neighborIdStr = typeof rawNeighborId === 'string' ? rawNeighborId : String(rawNeighborId || '');
-                const neighborName = neighborIdStr.split('/').pop();
-                return (
+        {/* Connected Documents & Hubs */}
+        <div className="space-y-4">
+          {/* Explicit Links / References */}
+          {referenceEdges.length > 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-serif font-medium text-text border-b border-border pb-1 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <LinkIcon className="w-3.5 h-3.5 text-amber-500" />
+                  Explicit Links / References
+                </span>
+                <span className="text-2xs text-text-dim font-mono">({referenceEdges.length})</span>
+              </h4>
+              <div className="space-y-1.5">
+                {referenceEdges.map((edge, i) => (
                   <div
                     key={i}
                     className="flex items-center justify-between p-2 rounded-lg bg-surface-2 border border-border text-xs"
                   >
-                    <span className="text-text-dim truncate max-w-[180px] font-mono">{neighborName}</span>
+                    <span className="text-text-dim truncate max-w-[180px] font-mono">
+                      {getNeighborName(edge)}
+                    </span>
+                    <span className="text-2xs font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                      reference
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tag Connections */}
+          {tagEdges.length > 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-serif font-medium text-text border-b border-border pb-1 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Tag className="w-3.5 h-3.5 text-emerald-500" />
+                  Tag Connections
+                </span>
+                <span className="text-2xs text-text-dim font-mono">({tagEdges.length})</span>
+              </h4>
+              <div className="space-y-1.5">
+                {tagEdges.map((edge, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between p-2 rounded-lg bg-surface-2 border border-border text-xs"
+                  >
+                    <span className="text-text-dim truncate max-w-[180px] font-mono">
+                      {getNeighborName(edge)}
+                    </span>
+                    <span className="text-2xs font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                      tag
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Semantic Neighbors */}
+          {similarityEdges.length > 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-serif font-medium text-text border-b border-border pb-1 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-accent" />
+                  Semantic Neighbors
+                </span>
+                <span className="text-2xs text-text-dim font-mono">({similarityEdges.length})</span>
+              </h4>
+              <div className="space-y-1.5">
+                {similarityEdges.map((edge, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between p-2 rounded-lg bg-surface-2 border border-border text-xs"
+                  >
+                    <span className="text-text-dim truncate max-w-[180px] font-mono">
+                      {getNeighborName(edge)}
+                    </span>
                     <span className="text-2xs font-mono px-1.5 py-0.5 rounded bg-accent-soft text-accent border border-accent/20">
                       {Math.round((edge.weight || 0) * 100)}%
                     </span>
                   </div>
-                );
-              })
-            ) : (
+                ))}
+              </div>
+            </div>
+          )}
+
+          {connectedEdges.length === 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-serif font-medium text-text border-b border-border pb-1">
+                Connections
+              </h4>
               <p className="text-xs text-text-dim italic">No connections above cutoff</p>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
-

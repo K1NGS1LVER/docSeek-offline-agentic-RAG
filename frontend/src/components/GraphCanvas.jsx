@@ -13,6 +13,8 @@ const getThemePalette = (theme) => {
     nodeHover: isLight ? '#8a3c08' : '#e88d1a',
     nodeGlow: isLight ? 'rgba(163, 72, 10, 0.25)' : 'rgba(217, 119, 6, 0.25)',
     edgeStroke: isLight ? 'rgba(163, 72, 10, 0.25)' : 'rgba(217, 119, 6, 0.25)',
+    referenceStroke: isLight ? 'rgba(163, 72, 10, 0.7)' : 'rgba(217, 119, 6, 0.7)',
+    similarityStroke: isLight ? 'rgba(163, 72, 10, 0.15)' : 'rgba(255, 255, 255, 0.08)',
     tagStroke: isLight ? 'rgba(22, 101, 52, 0.35)' : 'rgba(22, 163, 74, 0.35)',
     tagNode: isLight ? '#166534' : '#16a34a',
     matchNode: isLight ? '#b91c1c' : '#ef4444',
@@ -176,8 +178,16 @@ export default function GraphCanvas({
         ctx.beginPath();
         ctx.moveTo(pA.x, pA.y);
         ctx.lineTo(pB.x, pB.y);
-        ctx.strokeStyle = edge.type === 'tag' ? palette.tagStroke : palette.edgeStroke;
-        ctx.lineWidth = Math.max(1.5, (edge.weight || 0.5) * 3);
+        if (edge.type === 'reference') {
+          ctx.strokeStyle = palette.referenceStroke;
+          ctx.lineWidth = Math.max(1.8, (edge.weight || 1.0) * 3);
+        } else if (edge.type === 'tag') {
+          ctx.strokeStyle = palette.tagStroke;
+          ctx.lineWidth = Math.max(1.5, (edge.weight || 0.5) * 3);
+        } else {
+          ctx.strokeStyle = palette.similarityStroke;
+          ctx.lineWidth = Math.max(1.0, (edge.weight || 0.3) * 2);
+        }
         ctx.stroke();
       });
 
