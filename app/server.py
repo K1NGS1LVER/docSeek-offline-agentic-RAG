@@ -72,7 +72,7 @@ if not DOCX_AVAILABLE:
 # across engines (VectorEngine loads it lazily/once), so opening many
 # notebooks does not multiply model memory.
 
-Runtime = namedtuple("Runtime", ["db_path", "engine"])
+Runtime = namedtuple("Runtime", ["db_path", "engine", "lock"])
 _runtimes: dict[str, "Runtime"] = {}
 _runtimes_lock = threading.Lock()
 
@@ -84,7 +84,7 @@ def get_runtime(nb_id: str) -> Runtime:
         rt = _runtimes.get(nb_id)
         if rt is None:
             engine = VectorEngine(nb_index_path(nb_id))
-            rt = Runtime(db_path=nb_db_path(nb_id), engine=engine)
+            rt = Runtime(db_path=nb_db_path(nb_id), engine=engine, lock=threading.Lock())
             # Auto-rebuild this notebook's index if its DB has docs but index is empty.
             if database.get_document_count(rt.db_path) > 0 and engine.get_total_vectors() == 0:
                 _rebuild_runtime(rt)
@@ -1620,7 +1620,7 @@ def reset_system(notebook_id: str = Query(...), _: None = Depends(require_admin)
     database.init_db(nb_db_path(notebook_id))
     with _runtimes_lock:
         _runtimes[notebook_id] = Runtime(
-            db_path=nb_db_path(notebook_id), engine=VectorEngine(nb_index_path(notebook_id))
+            db_path=nb_db_path(notebook_id), engine=VectorEngine(nb_index_path(notebook_id)), lock=threading.Lock()
         )
 
     return {"status": "System reset successfully"}
