@@ -136,3 +136,9 @@ TTS_VOICE_B = os.environ.get("DOCSEEK_TTS_VOICE_B", "am_michael")
 
 # Upper bound on sections in a deep research report.
 RESEARCH_MAX_SECTIONS = 6
+
+# Idle timeout in seconds before unloading audio models (STT/TTS) to release RAM/VRAM.
+DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS = float(
+    os.getenv("DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS", "300")
+)
+
