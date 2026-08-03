@@ -81,6 +81,7 @@ def build_graph_data(
             src_i = nodes[i]["id"]
             src_j = nodes[j]["id"]
 
+            edge_added = False
             # Embedding similarity edge
             if src_i in doc_vectors and src_j in doc_vectors:
                 sim = compute_cosine_similarity(doc_vectors[src_i], doc_vectors[src_j])
@@ -93,14 +94,13 @@ def build_graph_data(
                             "type": "similarity",
                         }
                     )
+                    edge_added = True
 
             # Shared tag edge
             tags_i = set(nodes[i]["tags"])
             tags_j = set(nodes[j]["tags"])
             shared_tags = tags_i & tags_j
-            if shared_tags and not any(
-                e["source"] == src_i and e["target"] == src_j for e in edges
-            ):
+            if shared_tags and not edge_added:
                 edges.append(
                     {
                         "source": src_i,
