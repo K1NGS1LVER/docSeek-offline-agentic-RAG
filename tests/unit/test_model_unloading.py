@@ -49,11 +49,27 @@ def test_stt_idle_check_zero_or_negative_timeout():
 def test_stt_unload_direct():
     mock_model = MagicMock()
     stt._model = mock_model
+    stt._load_failed = False
     stt._last_used_time = time.time()
 
     assert stt.unload() is True
     assert stt._model is None
     assert stt._last_used_time == 0.0
+    assert stt._load_failed is False
     assert stt.unload() is False
+
+
+def test_stt_unload_resets_load_failed():
+    stt._model = None
+    stt._load_failed = True
+    stt.unload()
+    assert stt._load_failed is False
+
+    mock_model = MagicMock()
+    stt._model = mock_model
+    stt._load_failed = True
+    assert stt.unload() is True
+    assert stt._load_failed is False
+
 
 

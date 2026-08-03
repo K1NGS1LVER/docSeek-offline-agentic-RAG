@@ -89,8 +89,9 @@ def unload() -> bool:
     Returns:
         bool: True if model was loaded and is now unloaded, False otherwise.
     """
-    global _model, _last_used_time
+    global _model, _last_used_time, _load_failed
     with _model_lock:
+        _load_failed = False
         if _model is None:
             return False
         logger.info("Unloading STT model...")
