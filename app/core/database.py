@@ -222,19 +222,21 @@ def list_sources(db_path: str) -> List[Dict[str, Any]]:
     with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
-            """SELECT source_file, COUNT(*), MIN(id),
+            """SELECT COALESCE(NULLIF(source_file, ''), json_extract(metadata, '$.source_file'), json_extract(metadata, '$.source'), json_extract(metadata, '$.filename'), json_extract(metadata, '$.title'), 'Document #' || id) AS src_name,
+                      COUNT(*), MIN(id),
                       (SELECT metadata FROM documents d2
-                        WHERE d2.source_file = d.source_file AND d2.metadata IS NOT NULL
+                        WHERE (d2.source_file = d.source_file OR d2.id = d.id) AND d2.metadata IS NOT NULL
                         ORDER BY id LIMIT 1)
                FROM documents d
-               WHERE source_file IS NOT NULL
-               GROUP BY source_file"""
+               GROUP BY src_name"""
         )
         rows = cursor.fetchall()
     return [
         {"source_file": r[0], "chunks": r[1], "first_chunk_id": r[2], "metadata": r[3]}
         for r in rows
     ]
+
+
 
 def delete_documents_by_source(db_path: str, source_file: str) -> List[int]:
     """Delete all chunks for a source_file. Returns the deleted ids."""

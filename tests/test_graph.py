@@ -1,7 +1,11 @@
 import json
 import pytest
+import numpy as np
 from unittest.mock import patch, MagicMock
 from app.core.graph import compute_cosine_similarity, build_graph_data
+from app.core.engine import VectorEngine
+from app.core import database
+
 
 
 def test_compute_cosine_similarity():
@@ -105,3 +109,38 @@ def test_build_graph_data_nodes_and_edges(mock_fetch_chunks, mock_list_sources):
     )
     assert data["stats"]["total_documents"] == 3
     assert data["stats"]["total_edges"] == len(edges)
+
+
+def test_get_embeddings_map(tmp_path):
+    index_file = str(tmp_path / "test.index")
+    with patch("app.core.engine.get_shared_model"):
+        engine = VectorEngine(index_file)
+        assert engine.get_embeddings_map() == {}
+
+        vecs = np.random.randn(2, engine.dimension).astype("float32")
+        engine.add_to_index(vecs, doc_ids=[10, 20])
+        emb_map = engine.get_embeddings_map()
+        assert len(emb_map) == 2
+        assert 10 in emb_map
+        assert 20 in emb_map
+        assert len(emb_map[10]) == engine.dimension
+
+
+def test_list_sources_metadata_fallback(tmp_path):
+    db_file = str(tmp_path / "test.db")
+    database.init_db(db_file)
+
+    database.insert_document(db_file, "content 1", metadata=json.dumps({"source_file": "file1.txt"}))
+    database.insert_document(db_file, "content 2", metadata=json.dumps({"filename": "file2.pdf"}))
+    database.insert_document(db_file, "content 3", metadata=json.dumps({"title": "Notebook Note"}))
+    database.insert_document(db_file, "content 4", metadata=None)
+
+    sources = database.list_sources(db_file)
+    src_names = [s["source_file"] for s in sources]
+
+    assert "file1.txt" in src_names
+    assert "file2.pdf" in src_names
+    assert "Notebook Note" in src_names
+    assert "Document #4" in src_names
+    assert len(sources) == 4
+

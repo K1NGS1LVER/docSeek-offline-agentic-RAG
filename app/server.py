@@ -1599,9 +1599,7 @@ async def get_graph_data(
                 notebook_id = nb["id"]
         rt = get_runtime(notebook_id)
 
-        chunk_embeddings_map = getattr(rt.engine, "embeddings_map", None)
-        if chunk_embeddings_map is None and hasattr(app.state, "vector_store") and app.state.vector_store:
-            chunk_embeddings_map = getattr(app.state.vector_store, "embeddings_map", None)
+        chunk_embeddings_map = rt.engine.get_embeddings_map() if hasattr(rt.engine, "get_embeddings_map") else None
 
         data = build_graph_data(
             db_path=rt.db_path,

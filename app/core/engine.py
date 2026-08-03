@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+from typing import Dict, List
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -166,3 +167,37 @@ class VectorEngine:
         with self._lock:
             removed = self.index.remove_ids(ids)
         return int(removed)
+
+    def get_embeddings_map(self) -> Dict[int, List[float]]:
+        """Reconstruct vector embeddings map for all chunk IDs stored in FAISS."""
+        result = {}
+        with self._lock:
+            if self.index.ntotal == 0:
+                return result
+            try:
+                if hasattr(self.index, "id_map"):
+                    ids = faiss.vector_to_array(self.index.id_map)
+                    base_index = getattr(self.index, "index", self.index)
+                    for i, doc_id in enumerate(ids):
+                        doc_id_int = int(doc_id)
+                        try:
+                            vec = base_index.reconstruct(i)
+                            result[doc_id_int] = vec.tolist()
+                        except Exception:
+                            try:
+                                vec = self.index.reconstruct(doc_id_int)
+                                result[doc_id_int] = vec.tolist()
+                            except Exception:
+                                pass
+                else:
+                    for i in range(self.index.ntotal):
+                        try:
+                            vec = self.index.reconstruct(i)
+                            result[i] = vec.tolist()
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning(f"Could not reconstruct vectors from FAISS: {e}")
+        return result
+
+
