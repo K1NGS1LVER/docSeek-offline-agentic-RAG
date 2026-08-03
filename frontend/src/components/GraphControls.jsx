@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sliders, Search, RefreshCw, Sun, Moon } from 'lucide-react';
+import { Search, RefreshCw, Sun, Moon } from 'lucide-react';
 import { IconButton } from './ui';
 
 export default function GraphControls({
@@ -14,48 +14,22 @@ export default function GraphControls({
   setTheme,
 }) {
   return (
-    <div className="absolute top-4 left-4 z-10 w-80 bg-surface-2 border border-border rounded-xl p-4 shadow-2xl text-text text-xs space-y-4">
-      <div className="flex items-center justify-between border-b border-border pb-2">
-        <div className="flex items-center gap-2 font-semibold text-text">
-          <Sliders className="w-4 h-4 text-accent" />
-          <span>Graph Filters & Physics</span>
-        </div>
-        <div className="flex items-center gap-1">
-          {setTheme && (
-            <IconButton
-              icon={theme === 'light' ? Moon : Sun}
-              size="sm"
-              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-              title={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
-            />
-          )}
-          <IconButton
-            icon={RefreshCw}
-            size="sm"
-            onClick={onReset}
-            title="Reset Controls"
-          />
-        </div>
-      </div>
-
+    <div className="flex items-center gap-3 text-text text-xs">
       {/* Search Input */}
       <div className="relative">
-        <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-text-muted" />
+        <Search className="w-3.5 h-3.5 absolute left-2.5 top-2 text-text-muted pointer-events-none" />
         <input
           type="text"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Filter nodes..."
-          className="w-full bg-surface-2 border border-border rounded-lg pl-8 pr-3 py-1.5 text-xs text-text placeholder-text-muted focus:outline-none focus:border-accent transition-colors"
+          className="w-40 bg-surface-2 border border-border rounded-lg pl-8 pr-3 py-1 text-xs text-text placeholder-text-muted focus:outline-none focus:border-accent transition-colors"
         />
       </div>
 
       {/* Similarity Cutoff Slider */}
-      <div className="space-y-1">
-        <div className="flex justify-between text-[11px] text-text-dim">
-          <span>Cutoff:</span>
-          <span className="font-mono text-accent">{Math.round(minSimilarity * 100)}%</span>
-        </div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] text-text-dim whitespace-nowrap">Cutoff:</span>
         <input
           type="range"
           min="0.1"
@@ -63,16 +37,14 @@ export default function GraphControls({
           step="0.05"
           value={minSimilarity}
           onChange={(e) => setMinSimilarity(parseFloat(e.target.value))}
-          className="w-full h-1.5 bg-surface border border-border rounded-lg appearance-none cursor-pointer accent-accent"
+          className="w-20 h-1.5 bg-surface border border-border rounded-lg appearance-none cursor-pointer accent-accent"
         />
+        <span className="font-mono text-accent text-[11px] w-7">{Math.round(minSimilarity * 100)}%</span>
       </div>
 
-      {/* Repulsion Slider */}
-      <div className="space-y-1">
-        <div className="flex justify-between text-[11px] text-text-dim">
-          <span>Force:</span>
-          <span className="font-mono text-accent">{repulsion}</span>
-        </div>
+      {/* Repulsion / Force Slider */}
+      <div className="flex items-center gap-1.5">
+        <span className="text-[11px] text-text-dim whitespace-nowrap">Force:</span>
         <input
           type="range"
           min="50"
@@ -80,9 +52,28 @@ export default function GraphControls({
           step="25"
           value={repulsion}
           onChange={(e) => setRepulsion(parseInt(e.target.value, 10))}
-          className="w-full h-1.5 bg-surface border border-border rounded-lg appearance-none cursor-pointer accent-accent"
+          className="w-20 h-1.5 bg-surface border border-border rounded-lg appearance-none cursor-pointer accent-accent"
         />
+        <span className="font-mono text-accent text-[11px] w-7">{repulsion}</span>
       </div>
+
+      {/* Reset Button */}
+      <IconButton
+        icon={RefreshCw}
+        size="sm"
+        onClick={onReset}
+        title="Reset Controls"
+      />
+
+      {/* Theme Toggle */}
+      {setTheme && (
+        <IconButton
+          icon={theme === 'light' ? Moon : Sun}
+          size="sm"
+          onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+          title={theme === 'light' ? 'Switch to dark' : 'Switch to light'}
+        />
+      )}
     </div>
   );
 }
