@@ -132,5 +132,14 @@ def test_tts_unload_resets_load_failed():
     assert tts._load_failed is False
 
 
+def test_check_audio_models_idle_invokes_both(monkeypatch):
+    stt_mock = MagicMock(return_value=False)
+    tts_mock = MagicMock(return_value=False)
+    monkeypatch.setattr("app.core.stt.check_idle_unload", stt_mock)
+    monkeypatch.setattr("app.core.tts.check_idle_unload", tts_mock)
 
+    from app.server import _check_audio_models_idle
 
+    _check_audio_models_idle()
+    stt_mock.assert_called_once()
+    tts_mock.assert_called_once()

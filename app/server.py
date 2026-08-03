@@ -29,6 +29,7 @@ from app.core.config import (
     RERANK_MODEL,
     RERANK_CANDIDATE_FACTOR,
     CHUNKING_STRATEGY,
+    DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS,
 )
 from app.core import database, parsing, chunking, reranker, stt, tts, podcast, research
 from app.core.engine import VectorEngine
@@ -280,6 +281,25 @@ class GitHubIngestRequest(BaseModel):
 llm: Optional[OllamaLLM] = None
 
 
+def _check_audio_models_idle() -> tuple[bool, bool]:
+    """Check both STT and TTS models for idle timeout and unload if idle."""
+    stt_unloaded = stt.check_idle_unload(DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS)
+    tts_unloaded = tts.check_idle_unload(DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS)
+    return stt_unloaded, tts_unloaded
+
+
+async def _audio_idle_checker_loop():
+    """Background task that periodically checks if audio models (STT/TTS) are idle."""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            _check_audio_models_idle()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in audio idle checker loop: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -294,11 +314,19 @@ async def lifespan(app: FastAPI):
     # tts.warmup() itself and must never affect startup.
     asyncio.create_task(run_in_threadpool(tts.warmup))
 
+    _audio_idle_checker_task = asyncio.create_task(_audio_idle_checker_loop())
+
     # Notebook runtimes lazy-load on first request (see get_runtime); there is
     # no single global index/DB to rebuild or warm at startup anymore.
     logger.info("System ready. Notebook runtimes load lazily on first request.")
     yield
     # Shutdown
+    _audio_idle_checker_task.cancel()
+    try:
+        await _audio_idle_checker_task
+    except asyncio.CancelledError:
+        pass
+
     with _runtimes_lock:
         _open_runtimes = list(_runtimes.values())
     for rt in _open_runtimes:
