@@ -47,9 +47,9 @@ export default function GraphControls({
         <span className="text-[11px] text-text-dim whitespace-nowrap">Force:</span>
         <input
           type="range"
-          min="50"
-          max="500"
-          step="25"
+          min="100"
+          max="800"
+          step="50"
           value={repulsion}
           onChange={(e) => setRepulsion(parseInt(e.target.value, 10))}
           className="w-20 h-1.5 bg-surface border border-border rounded-lg appearance-none cursor-pointer accent-accent"

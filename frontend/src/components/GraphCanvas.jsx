@@ -48,7 +48,7 @@ export default function GraphCanvas({
     nodes.forEach((node, i) => {
       if (!positionsRef.current.has(node.id)) {
         const angle = (i / (nodes.length || 1)) * 2 * Math.PI;
-        const radius = 120 + Math.random() * 80;
+        const radius = 200 + Math.random() * 120;
         positionsRef.current.set(node.id, {
           x: width / 2 + radius * Math.cos(angle),
           y: height / 2 + radius * Math.sin(angle),
@@ -66,11 +66,22 @@ export default function GraphCanvas({
 
     const handleWheel = (e) => {
       e.preventDefault();
-      const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
-      setCamera((prev) => ({
-        ...prev,
-        zoom: Math.max(0.2, Math.min(4, prev.zoom * zoomFactor))
-      }));
+      const rect = container.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const zoomFactor = Math.max(0.8, Math.min(1.2, 1 - e.deltaY * 0.0015));
+
+      setCamera((prev) => {
+        const nextZoom = Math.max(0.15, Math.min(4, prev.zoom * zoomFactor));
+        const mouseWorldX = (mouseX - prev.x) / prev.zoom;
+        const mouseWorldY = (mouseY - prev.y) / prev.zoom;
+        return {
+          zoom: nextZoom,
+          x: mouseX - mouseWorldX * nextZoom,
+          y: mouseY - mouseWorldY * nextZoom
+        };
+      });
     };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
@@ -128,7 +139,7 @@ export default function GraphCanvas({
         const dx = pB.x - pA.x;
         const dy = pB.y - pA.y;
         const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        const springForce = (dist - 120) * 0.01 * (edge.weight || 0.5);
+        const springForce = (dist - 220) * 0.008 * (edge.weight || 0.5);
 
         pA.vx += (dx / dist) * springForce;
         pA.vy += (dy / dist) * springForce;
@@ -179,11 +190,11 @@ export default function GraphCanvas({
         const isMatched =
           searchQuery && node.label?.toLowerCase().includes(searchQuery.toLowerCase());
         const isTag = Boolean(node.is_tag);
-        const radius = Math.max(8, Math.min(20, (node.chunk_count || 1) * 1.5));
+        const radius = Math.max(5, Math.min(12, (node.chunk_count || 1) * 0.8));
 
         // Outer Glow
         ctx.beginPath();
-        ctx.arc(p.x, p.y, radius + (isHovered ? 8 : 4), 0, 2 * Math.PI);
+        ctx.arc(p.x, p.y, radius + (isHovered ? 6 : 3), 0, 2 * Math.PI);
         ctx.fillStyle = isMatched
           ? 'rgba(239, 68, 68, 0.3)'
           : isHovered
@@ -254,8 +265,8 @@ export default function GraphCanvas({
         const dx = mouseX - p.x;
         const dy = mouseY - p.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        const radius = Math.max(8, Math.min(20, (node.chunk_count || 1) * 1.5));
-        const maxHitRadius = Math.max(16, radius);
+        const radius = Math.max(5, Math.min(12, (node.chunk_count || 1) * 0.8));
+        const maxHitRadius = Math.max(12, radius);
         if (dist <= maxHitRadius && dist < minDistance) {
           minDistance = dist;
           found = node.id;
@@ -285,8 +296,8 @@ export default function GraphCanvas({
       const dx = mouseX - p.x;
       const dy = mouseY - p.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      const radius = Math.max(8, Math.min(20, (node.chunk_count || 1) * 1.5));
-      const maxHitRadius = Math.max(16, radius);
+      const radius = Math.max(5, Math.min(12, (node.chunk_count || 1) * 0.8));
+      const maxHitRadius = Math.max(12, radius);
       if (dist <= maxHitRadius && dist < minDistance) {
         minDistance = dist;
         closestNode = node;

@@ -11,7 +11,7 @@ export default function GraphPage({ theme = 'dark', setTheme }) {
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [minSimilarity, setMinSimilarity] = useState(0.3);
-  const [repulsion, setRepulsion] = useState(200);
+  const [repulsion, setRepulsion] = useState(350);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedNode, setSelectedNode] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -35,7 +35,7 @@ export default function GraphPage({ theme = 'dark', setTheme }) {
 
   const handleReset = () => {
     setMinSimilarity(0.3);
-    setRepulsion(200);
+    setRepulsion(350);
     setSearchQuery('');
   };
 
