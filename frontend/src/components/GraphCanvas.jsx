@@ -63,8 +63,13 @@ export default function GraphCanvas({
     const ctx = canvas.getContext('2d');
 
     const render = () => {
-      const width = (canvas.width = canvas.clientWidth || 800);
-      const height = (canvas.height = canvas.clientHeight || 600);
+      const clientWidth = canvas.clientWidth || 800;
+      const clientHeight = canvas.clientHeight || 600;
+      if (canvas.width !== clientWidth) canvas.width = clientWidth;
+      if (canvas.height !== clientHeight) canvas.height = clientHeight;
+
+      const width = canvas.width;
+      const height = canvas.height;
 
       // Physics step (Simple spring-repulsion layout)
       const posMap = positionsRef.current;
@@ -149,6 +154,7 @@ export default function GraphCanvas({
         const isMatched =
           searchQuery &&
           node.label?.toLowerCase().includes(searchQuery.toLowerCase());
+        const isTag = node.type === 'tag' || Boolean(node.is_tag);
         const radius = Math.max(6, Math.min(18, (node.chunk_count || 1) * 1.5));
 
         // Outer Glow
@@ -157,7 +163,11 @@ export default function GraphCanvas({
         ctx.fillStyle = isMatched
           ? 'rgba(244, 63, 94, 0.3)'
           : isHovered
-          ? 'rgba(56, 189, 248, 0.4)'
+          ? isTag
+            ? 'rgba(52, 211, 153, 0.4)'
+            : 'rgba(56, 189, 248, 0.4)'
+          : isTag
+          ? 'rgba(52, 211, 153, 0.15)'
           : 'rgba(56, 189, 248, 0.1)';
         ctx.fill();
 
@@ -167,10 +177,14 @@ export default function GraphCanvas({
         ctx.fillStyle = isMatched
           ? '#f43f5e'
           : isHovered
-          ? '#38bdf8'
+          ? isTag
+            ? '#6ee7b7'
+            : '#38bdf8'
+          : isTag
+          ? '#34d399'
           : '#0284c7';
         ctx.fill();
-        ctx.strokeStyle = '#38bdf8';
+        ctx.strokeStyle = isTag ? '#34d399' : '#38bdf8';
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
@@ -216,13 +230,18 @@ export default function GraphCanvas({
       const mouseY = (e.clientY - rect.top - camera.y) / camera.zoom;
 
       let found = null;
+      let minDistance = Infinity;
+
       nodes.forEach((node) => {
         const p = positionsRef.current.get(node.id);
         if (!p) return;
         const dx = mouseX - p.x;
         const dy = mouseY - p.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
         const radius = Math.max(6, Math.min(18, (node.chunk_count || 1) * 1.5));
-        if (Math.sqrt(dx * dx + dy * dy) <= Math.max(15, radius)) {
+        const maxHitRadius = Math.max(15, radius);
+        if (dist <= maxHitRadius && dist < minDistance) {
+          minDistance = dist;
           found = node.id;
         }
       });
@@ -245,16 +264,26 @@ export default function GraphCanvas({
     const mouseX = (e.clientX - rect.left - camera.x) / camera.zoom;
     const mouseY = (e.clientY - rect.top - camera.y) / camera.zoom;
 
+    let closestNode = null;
+    let minDistance = Infinity;
+
     nodes.forEach((node) => {
       const p = positionsRef.current.get(node.id);
       if (!p) return;
       const dx = mouseX - p.x;
       const dy = mouseY - p.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
       const radius = Math.max(6, Math.min(18, (node.chunk_count || 1) * 1.5));
-      if (Math.sqrt(dx * dx + dy * dy) <= Math.max(15, radius)) {
-        if (onSelectNode) onSelectNode(node);
+      const maxHitRadius = Math.max(15, radius);
+      if (dist <= maxHitRadius && dist < minDistance) {
+        minDistance = dist;
+        closestNode = node;
       }
     });
+
+    if (closestNode && onSelectNode) {
+      onSelectNode(closestNode);
+    }
   };
 
   return (
