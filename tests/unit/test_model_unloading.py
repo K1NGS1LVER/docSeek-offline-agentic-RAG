@@ -3,6 +3,7 @@ import time
 from unittest.mock import MagicMock
 from app.core import config
 from app.core import stt
+from app.core import tts
 
 
 def test_audio_idle_timeout_config_default():
@@ -70,6 +71,66 @@ def test_stt_unload_resets_load_failed():
     stt._load_failed = True
     assert stt.unload() is True
     assert stt._load_failed is False
+
+
+def test_tts_unload_and_idle_check():
+    mock_pipeline = MagicMock()
+    tts._pipeline = mock_pipeline
+    tts._load_failed = False
+    tts._last_used_time = time.time() - 400.0  # 400s ago
+
+    unloaded = tts.check_idle_unload(300.0)
+    assert unloaded is True
+    assert tts._pipeline is None
+
+    assert tts.check_idle_unload(300.0) is False
+
+
+def test_tts_idle_check_below_timeout():
+    mock_pipeline = MagicMock()
+    tts._pipeline = mock_pipeline
+    tts._load_failed = False
+    tts._last_used_time = time.time() - 100.0  # 100s ago (< 300s)
+
+    assert tts.check_idle_unload(300.0) is False
+    assert tts._pipeline is mock_pipeline
+
+
+def test_tts_idle_check_zero_or_negative_timeout():
+    mock_pipeline = MagicMock()
+    tts._pipeline = mock_pipeline
+    tts._last_used_time = time.time() - 400.0
+
+    assert tts.check_idle_unload(0.0) is False
+    assert tts.check_idle_unload(-10.0) is False
+    assert tts._pipeline is mock_pipeline
+
+
+def test_tts_unload_direct():
+    mock_pipeline = MagicMock()
+    tts._pipeline = mock_pipeline
+    tts._load_failed = False
+    tts._last_used_time = time.time()
+
+    assert tts.unload() is True
+    assert tts._pipeline is None
+    assert tts._last_used_time == 0.0
+    assert tts._load_failed is False
+    assert tts.unload() is False
+
+
+def test_tts_unload_resets_load_failed():
+    tts._pipeline = None
+    tts._load_failed = True
+    tts.unload()
+    assert tts._load_failed is False
+
+    mock_pipeline = MagicMock()
+    tts._pipeline = mock_pipeline
+    tts._load_failed = True
+    assert tts.unload() is True
+    assert tts._load_failed is False
+
 
 
 

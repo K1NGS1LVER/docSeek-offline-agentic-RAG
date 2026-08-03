@@ -13,9 +13,11 @@ espeak-ng (brew install espeak-ng) improves pronunciation of out-of-vocabulary
 words, but plain English works without it via the bundled spaCy fallback.
 """
 
+import gc
 import logging
 import re
 import threading
+import time
 import unicodedata
 from typing import Iterator, List, Optional
 
@@ -36,15 +38,20 @@ VOICE_B = TTS_VOICE_B
 _pipeline = None
 _pipeline_lock = threading.Lock()
 _load_failed = False
+_last_used_time: float = 0.0
 
 
 def _get_pipeline():
     """Lazy-load the Kokoro pipeline on first use (thread-safe)."""
-    global _pipeline, _load_failed
+    global _pipeline, _load_failed, _last_used_time
     if _pipeline is not None or _load_failed:
+        if _pipeline is not None:
+            _last_used_time = time.time()
         return _pipeline
     with _pipeline_lock:
         if _pipeline is not None or _load_failed:
+            if _pipeline is not None:
+                _last_used_time = time.time()
             return _pipeline
         try:
             from kokoro import KPipeline
@@ -52,6 +59,7 @@ def _get_pipeline():
             logger.info("Loading Kokoro TTS pipeline (American English)...")
             # lang_code "a" = American English; matches the af_/am_ voices.
             _pipeline = KPipeline(lang_code="a")
+            _last_used_time = time.time()
             logger.info("Kokoro TTS pipeline loaded.")
         except Exception as e:
             logger.error(f"Failed to load Kokoro TTS: {e}. Podcast generation disabled.")
@@ -113,15 +121,18 @@ def synthesize(text: str, voice: str) -> Optional[np.ndarray]:
     we retry sentence by sentence and skip only the offending sentence, so a
     single bad token can never crash a whole podcast job.
     """
+    global _last_used_time
     pipeline = _get_pipeline()
     if pipeline is None:
         return None
+    _last_used_time = time.time()
     text = _sanitize(text)
     if not text:
         return np.zeros(0, dtype=np.float32)
 
     try:
         segments = _run(pipeline, text, voice)
+        _last_used_time = time.time()
     except Exception as e:
         logger.warning(f"TTS failed for a passage ({e}); retrying sentence by sentence.")
         segments = []
@@ -131,11 +142,13 @@ def synthesize(text: str, voice: str) -> Optional[np.ndarray]:
                 continue
             try:
                 segments.extend(_run(pipeline, sentence, voice))
+                _last_used_time = time.time()
             except Exception as e2:
                 logger.warning(f"TTS skipped an unsynthesizable passage: {e2}")
 
     if not segments:
         return np.zeros(0, dtype=np.float32)
+    _last_used_time = time.time()
     return np.concatenate(segments)
 
 
@@ -150,9 +163,11 @@ def synthesize_stream(text: str, voice: str) -> Iterator[np.ndarray]:
     ready almost immediately; this also means a G2P failure only ever costs
     one sentence, with no risk of duplicate audio on retry.
     """
+    global _last_used_time
     pipeline = _get_pipeline()
     if pipeline is None:
         return
+    _last_used_time = time.time()
     text = _sanitize(text)
     if not text:
         return
@@ -163,6 +178,47 @@ def synthesize_stream(text: str, voice: str) -> Iterator[np.ndarray]:
             continue
         try:
             for segment in _run(pipeline, sentence, voice):
+                _last_used_time = time.time()
                 yield segment
         except Exception as e:
             logger.warning(f"TTS skipped an unsynthesizable passage: {e}")
+
+
+def unload() -> bool:
+    """Unload the TTS pipeline from memory if currently loaded.
+
+    Returns:
+        bool: True if pipeline was loaded and is now unloaded, False otherwise.
+    """
+    global _pipeline, _last_used_time, _load_failed
+    with _pipeline_lock:
+        _load_failed = False
+        if _pipeline is None:
+            return False
+        logger.info("Unloading TTS pipeline...")
+        _pipeline = None
+        _last_used_time = 0.0
+        gc.collect()
+        logger.info("TTS pipeline unloaded.")
+        return True
+
+
+def check_idle_unload(timeout_seconds: float) -> bool:
+    """Unload the pipeline if it has been idle longer than timeout_seconds.
+
+    Args:
+        timeout_seconds: Max seconds of inactivity before unloading.
+
+    Returns:
+        bool: True if pipeline was unloaded, False otherwise.
+    """
+    if timeout_seconds <= 0:
+        return False
+    if _pipeline is None:
+        return False
+
+    idle_time = time.time() - _last_used_time
+    if idle_time >= timeout_seconds:
+        return unload()
+    return False
+
