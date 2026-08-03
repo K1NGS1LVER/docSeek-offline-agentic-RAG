@@ -189,20 +189,28 @@ function CopyButton({ text }) {
 function MicButton({ disabled, onStartDictation, onPartialText, onFinalText, onError }) {
   const [recording, setRecording] = useState(false);
   const [dictationHandle, setDictationHandle] = useState(null);
+  const recordingRef = useRef(false);
+  const dictationHandleRef = useRef(null);
 
   const stop = useCallback(() => {
-    if (dictationHandle) {
-      dictationHandle.stop();
+    recordingRef.current = false;
+    if (dictationHandleRef.current) {
+      dictationHandleRef.current.stop();
+      dictationHandleRef.current = null;
       setDictationHandle(null);
     }
     setRecording(false);
-  }, [dictationHandle]);
+  }, []);
 
   useEffect(() => {
     return () => {
-      dictationHandle?.stop();
+      recordingRef.current = false;
+      if (dictationHandleRef.current) {
+        dictationHandleRef.current.stop();
+        dictationHandleRef.current = null;
+      }
     };
-  }, [dictationHandle]);
+  }, []);
 
   const start = async () => {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
@@ -213,25 +221,41 @@ function MicButton({ disabled, onStartDictation, onPartialText, onFinalText, onE
     onStartDictation?.();
 
     try {
+      recordingRef.current = true;
       setRecording(true);
       const handle = await createDictationSocket(
         (partialText) => {
-          onPartialText?.(partialText);
+          if (recordingRef.current) onPartialText?.(partialText);
         },
         (finalText) => {
-          onFinalText?.(finalText);
-          setRecording(false);
-          setDictationHandle(null);
+          if (recordingRef.current) {
+            recordingRef.current = false;
+            dictationHandleRef.current = null;
+            onFinalText?.(finalText);
+            setRecording(false);
+            setDictationHandle(null);
+          }
         },
         (err) => {
+          recordingRef.current = false;
+          dictationHandleRef.current = null;
           const errMsg = typeof err === 'string' ? err : err?.message || 'Dictation error';
           onError?.(errMsg);
           setRecording(false);
           setDictationHandle(null);
         }
       );
+
+      if (!recordingRef.current) {
+        handle.stop();
+        return;
+      }
+
+      dictationHandleRef.current = handle;
       setDictationHandle(handle);
     } catch (err) {
+      recordingRef.current = false;
+      dictationHandleRef.current = null;
       const errMsg = err?.message || 'Failed to start dictation';
       onError?.(errMsg);
       setRecording(false);
