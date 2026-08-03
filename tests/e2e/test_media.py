@@ -234,3 +234,32 @@ def test_research_streams_trace_and_sources(server, notebook):
     assert isinstance(sources, list) and len(sources) >= 1
     for s in sources:
         assert set(s) >= {"id", "content", "score", "source"}
+
+
+def test_websocket_transcribe_endpoint(server):
+    """Test connecting to /ws/transcribe over WebSocket, sending audio bytes & EOS."""
+    import websocket
+    import wave
+    import io
+    import json
+
+    ws_url = server.replace("http://", "ws://") + "/ws/transcribe"
+    ws = websocket.create_connection(ws_url, timeout=30)
+
+    # Send silent 1-sec WAV bytes
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00" * 16000)
+    wav_bytes = buf.getvalue()
+
+    ws.send_binary(wav_bytes)
+    ws.send("EOS")
+
+    res = ws.recv()
+    data = json.loads(res)
+    assert data["type"] in ("partial", "final")
+    ws.close()
+

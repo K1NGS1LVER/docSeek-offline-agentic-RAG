@@ -7,7 +7,7 @@ import threading
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query, File, Form, UploadFile, Header, Depends
+from fastapi import FastAPI, HTTPException, Query, File, Form, UploadFile, Header, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from sse_starlette.sse import EventSourceResponse
@@ -946,6 +946,45 @@ async def transcribe_audio(file: UploadFile = File(...)):
         f"({result.get('language')}, {result.get('duration')}s)"
     )
     return result
+
+
+@app.websocket("/ws/transcribe")
+async def websocket_transcribe(websocket: WebSocket):
+    await websocket.accept()
+    if not stt.is_available():
+        await websocket.send_json({"type": "error", "message": "STT model unavailable."})
+        await websocket.close()
+        return
+
+    buffer = bytearray()
+    try:
+        while True:
+            message = await websocket.receive()
+            if "bytes" in message and message["bytes"]:
+                buffer.extend(message["bytes"])
+                if len(buffer) > 16000 * 2:  # >1 sec worth of audio
+                    res = await run_in_threadpool(stt.transcribe_bytes, bytes(buffer))
+                    if res and res.get("text"):
+                        await websocket.send_json({"type": "partial", "text": res["text"]})
+            elif "text" in message and message["text"] == "EOS":
+                res = await run_in_threadpool(stt.transcribe_bytes, bytes(buffer))
+                text = res.get("text", "") if res else ""
+                await websocket.send_json({"type": "final", "text": text})
+                break
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"WebSocket STT error: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
 
 
 # ============================================================================
