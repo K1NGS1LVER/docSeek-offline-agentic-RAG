@@ -4,9 +4,11 @@ import { X, FileText, Tag, Share2, Database } from 'lucide-react';
 export default function DocumentDrawer({ node, onClose, edges = [] }) {
   if (!node) return null;
 
+  const getId = (endpoint) => (typeof endpoint === 'object' && endpoint !== null ? endpoint.id : endpoint);
+
   // Find connected neighbors
   const connectedEdges = edges.filter(
-    (e) => e.source === node.id || e.target === node.id
+    (e) => getId(e.source) === node.id || getId(e.target) === node.id
   );
 
   return (
