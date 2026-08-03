@@ -19,7 +19,7 @@ export default function GraphPage({ theme = 'dark', setTheme }) {
   useEffect(() => {
     let isMounted = true;
     getGraphData(minSimilarity, notebookId)
-      .then((data) => {
+      .then(({ data }) => {
         if (isMounted) {
           setNodes(data.nodes || []);
           setEdges(data.edges || []);
