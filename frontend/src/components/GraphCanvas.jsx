@@ -1,32 +1,54 @@
 import React, { useRef, useEffect, useState } from 'react';
+import { Share2 } from 'lucide-react';
+
+// Helper to read current theme colors from CSS variables or theme prop
+const getThemePalette = (theme) => {
+  const isLight =
+    theme === 'light' ||
+    (typeof document !== 'undefined' &&
+      document.documentElement.getAttribute('data-theme') === 'light');
+  return {
+    bg: isLight ? '#f5eedc' : '#111110',
+    nodeCore: isLight ? '#a3480a' : '#d97706',
+    nodeHover: isLight ? '#8a3c08' : '#e88d1a',
+    nodeGlow: isLight ? 'rgba(163, 72, 10, 0.25)' : 'rgba(217, 119, 6, 0.25)',
+    edgeStroke: isLight ? 'rgba(163, 72, 10, 0.25)' : 'rgba(217, 119, 6, 0.25)',
+    tagStroke: isLight ? 'rgba(22, 101, 52, 0.35)' : 'rgba(22, 163, 74, 0.35)',
+    tagNode: isLight ? '#166534' : '#16a34a',
+    matchNode: isLight ? '#b91c1c' : '#ef4444',
+    text: isLight ? '#1c1914' : '#f5f3ef',
+    textDim: isLight ? '#5d5347' : '#918d85',
+    stroke: isLight ? 'rgba(28, 25, 20, 0.16)' : 'rgba(255, 255, 255, 0.14)'
+  };
+};
 
 export default function GraphCanvas({
   nodes = [],
   edges = [],
   repulsion = 200,
   searchQuery = '',
-  onSelectNode
+  onSelectNode,
+  theme = 'dark'
 }) {
   const canvasRef = useRef(null);
+  const containerRef = useRef(null);
   const [hoveredNode, setHoveredNode] = useState(null);
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 1 });
   const isDraggingRef = useRef(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const hasDraggedRef = useRef(false);
-
-  // Store 2D positions for physics simulation
   const positionsRef = useRef(new Map());
 
-  // Initialize/update particle layout
+  // Initialize/update particle positions around container center
   useEffect(() => {
-    const width = canvasRef.current?.clientWidth || 800;
-    const height = canvasRef.current?.clientHeight || 600;
+    const container = containerRef.current;
+    const width = container?.clientWidth || 800;
+    const height = container?.clientHeight || 600;
 
-    // Assign random initial positions if not set
     nodes.forEach((node, i) => {
       if (!positionsRef.current.has(node.id)) {
         const angle = (i / (nodes.length || 1)) * 2 * Math.PI;
-        const radius = 150 + Math.random() * 100;
+        const radius = 120 + Math.random() * 80;
         positionsRef.current.set(node.id, {
           x: width / 2 + radius * Math.cos(angle),
           y: height / 2 + radius * Math.sin(angle),
@@ -37,10 +59,10 @@ export default function GraphCanvas({
     });
   }, [nodes]);
 
-  // Non-passive wheel event listener for zooming canvas
+  // Non-passive wheel event listener for zooming
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!container) return;
 
     const handleWheel = (e) => {
       e.preventDefault();
@@ -51,33 +73,35 @@ export default function GraphCanvas({
       }));
     };
 
-    canvas.addEventListener('wheel', handleWheel, { passive: false });
-    return () => canvas.removeEventListener('wheel', handleWheel);
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
   }, []);
 
   // Main render & physics loop
   useEffect(() => {
     let animId;
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
     const ctx = canvas.getContext('2d');
 
     const render = () => {
-      const clientWidth = canvas.clientWidth || 800;
-      const clientHeight = canvas.clientHeight || 600;
+      const clientWidth = container.clientWidth || 800;
+      const clientHeight = container.clientHeight || 600;
+
       if (canvas.width !== clientWidth) canvas.width = clientWidth;
       if (canvas.height !== clientHeight) canvas.height = clientHeight;
 
       const width = canvas.width;
       const height = canvas.height;
+      const palette = getThemePalette(theme);
 
-      // Physics step (Simple spring-repulsion layout)
+      // Physics step
       const posMap = positionsRef.current;
       nodes.forEach((nodeA) => {
         const pA = posMap.get(nodeA.id);
         if (!pA) return;
 
-        // Repulsion between all nodes
         nodes.forEach((nodeB) => {
           if (nodeA.id === nodeB.id) return;
           const pB = posMap.get(nodeB.id);
@@ -93,10 +117,12 @@ export default function GraphCanvas({
         });
       });
 
-      // Edge spring attraction
+      // Edge spring attraction with normalized endpoints
       edges.forEach((edge) => {
-        const pA = posMap.get(edge.source);
-        const pB = posMap.get(edge.target);
+        const getId = (endpoint) =>
+          typeof endpoint === 'object' && endpoint !== null ? endpoint.id : endpoint;
+        const pA = posMap.get(getId(edge.source));
+        const pB = posMap.get(getId(edge.target));
         if (!pA || !pB) return;
 
         const dx = pB.x - pA.x;
@@ -110,7 +136,7 @@ export default function GraphCanvas({
         pB.vy -= (dy / dist) * springForce;
       });
 
-      // Update positions & friction
+      // Position update & friction
       nodes.forEach((node) => {
         const p = posMap.get(node.id);
         if (!p) return;
@@ -120,8 +146,8 @@ export default function GraphCanvas({
         p.y += p.vy;
       });
 
-      // Draw background (Obsidian cosmic dark)
-      ctx.fillStyle = '#0b0f19';
+      // Background fill
+      ctx.fillStyle = palette.bg;
       ctx.fillRect(0, 0, width, height);
 
       ctx.save();
@@ -130,18 +156,17 @@ export default function GraphCanvas({
 
       // Draw Edges
       edges.forEach((edge) => {
-        const pA = posMap.get(edge.source);
-        const pB = posMap.get(edge.target);
+        const getId = (endpoint) =>
+          typeof endpoint === 'object' && endpoint !== null ? endpoint.id : endpoint;
+        const pA = posMap.get(getId(edge.source));
+        const pB = posMap.get(getId(edge.target));
         if (!pA || !pB) return;
 
         ctx.beginPath();
         ctx.moveTo(pA.x, pA.y);
         ctx.lineTo(pB.x, pB.y);
-        ctx.strokeStyle =
-          edge.type === 'tag'
-            ? 'rgba(52, 211, 153, 0.25)'
-            : 'rgba(56, 189, 248, 0.25)';
-        ctx.lineWidth = Math.max(1, (edge.weight || 0.5) * 2.5);
+        ctx.strokeStyle = edge.type === 'tag' ? palette.tagStroke : palette.edgeStroke;
+        ctx.lineWidth = Math.max(1.5, (edge.weight || 0.5) * 3);
         ctx.stroke();
       });
 
@@ -152,45 +177,38 @@ export default function GraphCanvas({
 
         const isHovered = hoveredNode === node.id;
         const isMatched =
-          searchQuery &&
-          node.label?.toLowerCase().includes(searchQuery.toLowerCase());
+          searchQuery && node.label?.toLowerCase().includes(searchQuery.toLowerCase());
         const isTag = Boolean(node.is_tag);
-        const radius = Math.max(6, Math.min(18, (node.chunk_count || 1) * 1.5));
+        const radius = Math.max(8, Math.min(20, (node.chunk_count || 1) * 1.5));
 
         // Outer Glow
         ctx.beginPath();
         ctx.arc(p.x, p.y, radius + (isHovered ? 8 : 4), 0, 2 * Math.PI);
         ctx.fillStyle = isMatched
-          ? 'rgba(244, 63, 94, 0.3)'
+          ? 'rgba(239, 68, 68, 0.3)'
           : isHovered
-          ? isTag
-            ? 'rgba(52, 211, 153, 0.4)'
-            : 'rgba(56, 189, 248, 0.4)'
-          : isTag
-          ? 'rgba(52, 211, 153, 0.15)'
-          : 'rgba(56, 189, 248, 0.1)';
+          ? palette.nodeGlow
+          : 'rgba(217, 119, 6, 0.12)';
         ctx.fill();
 
         // Core Node
         ctx.beginPath();
         ctx.arc(p.x, p.y, radius, 0, 2 * Math.PI);
         ctx.fillStyle = isMatched
-          ? '#f43f5e'
+          ? palette.matchNode
           : isHovered
-          ? isTag
-            ? '#6ee7b7'
-            : '#38bdf8'
+          ? palette.nodeHover
           : isTag
-          ? '#34d399'
-          : '#0284c7';
+          ? palette.tagNode
+          : palette.nodeCore;
         ctx.fill();
-        ctx.strokeStyle = isTag ? '#34d399' : '#38bdf8';
+        ctx.strokeStyle = palette.stroke;
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
         // Label
-        ctx.fillStyle = isHovered ? '#ffffff' : '#94a3b8';
-        ctx.font = `${isHovered ? '600' : '400'} 11px Inter, sans-serif`;
+        ctx.fillStyle = isHovered ? palette.text : palette.textDim;
+        ctx.font = `${isHovered ? '600' : '400'} 12px "DM Sans", system-ui, sans-serif`;
         ctx.fillText(node.label || '', p.x + radius + 6, p.y + 4);
       });
 
@@ -200,9 +218,8 @@ export default function GraphCanvas({
 
     render();
     return () => cancelAnimationFrame(animId);
-  }, [nodes, edges, repulsion, camera, hoveredNode, searchQuery]);
+  }, [nodes, edges, repulsion, camera, hoveredNode, searchQuery, theme]);
 
-  // Mouse Handlers for Pan & Node Click
   const handleMouseDown = (e) => {
     isDraggingRef.current = true;
     dragStartRef.current = { x: e.clientX - camera.x, y: e.clientY - camera.y };
@@ -222,10 +239,9 @@ export default function GraphCanvas({
         y: e.clientY - dragStartRef.current.y
       }));
     } else {
-      // Hit testing for hover
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
+      const container = containerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
       const mouseX = (e.clientX - rect.left - camera.x) / camera.zoom;
       const mouseY = (e.clientY - rect.top - camera.y) / camera.zoom;
 
@@ -238,8 +254,8 @@ export default function GraphCanvas({
         const dx = mouseX - p.x;
         const dy = mouseY - p.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        const radius = Math.max(6, Math.min(18, (node.chunk_count || 1) * 1.5));
-        const maxHitRadius = Math.max(15, radius);
+        const radius = Math.max(8, Math.min(20, (node.chunk_count || 1) * 1.5));
+        const maxHitRadius = Math.max(16, radius);
         if (dist <= maxHitRadius && dist < minDistance) {
           minDistance = dist;
           found = node.id;
@@ -249,18 +265,14 @@ export default function GraphCanvas({
     }
   };
 
-  const handleMouseUp = () => {
-    isDraggingRef.current = false;
-  };
-
   const handleClick = (e) => {
     if (hasDraggedRef.current) {
       hasDraggedRef.current = false;
       return;
     }
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
     const mouseX = (e.clientX - rect.left - camera.x) / camera.zoom;
     const mouseY = (e.clientY - rect.top - camera.y) / camera.zoom;
 
@@ -273,8 +285,8 @@ export default function GraphCanvas({
       const dx = mouseX - p.x;
       const dy = mouseY - p.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
-      const radius = Math.max(6, Math.min(18, (node.chunk_count || 1) * 1.5));
-      const maxHitRadius = Math.max(15, radius);
+      const radius = Math.max(8, Math.min(20, (node.chunk_count || 1) * 1.5));
+      const maxHitRadius = Math.max(16, radius);
       if (dist <= maxHitRadius && dist < minDistance) {
         minDistance = dist;
         closestNode = node;
@@ -286,14 +298,35 @@ export default function GraphCanvas({
     }
   };
 
+  if (!nodes || nodes.length === 0) {
+    return (
+      <div className="flex-1 w-full h-full flex flex-col items-center justify-center p-8 text-center bg-carbon text-text-dim">
+        <div className="w-16 h-16 rounded-2xl bg-accent-soft border border-accent/20 flex items-center justify-center mb-4">
+          <Share2 className="w-7 h-7 text-accent" />
+        </div>
+        <h3 className="font-serif text-lg font-medium text-text mb-1">
+          No documents in knowledge graph
+        </h3>
+        <p className="text-xs text-text-dim max-w-sm">
+          Upload documents to this notebook to build interactive 2D semantic relationship maps.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <canvas
-      ref={canvasRef}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onClick={handleClick}
-      className="w-full h-full cursor-grab active:cursor-grabbing"
-    />
+    <div ref={containerRef} className="flex-1 w-full h-full relative overflow-hidden bg-carbon">
+      <canvas
+        ref={canvasRef}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={() => {
+          isDraggingRef.current = false;
+        }}
+        onClick={handleClick}
+        className="w-full h-full cursor-grab active:cursor-grabbing block"
+      />
+    </div>
   );
 }
+
