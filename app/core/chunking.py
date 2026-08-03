@@ -21,12 +21,13 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 from .parsing import chunk_text as _recursive_chunk_text, CHUNK_SIZE, CHUNK_OVERLAP
+from .ast_chunking import ast_chunk_document
 
 logger = logging.getLogger(__name__)
 
 Chunk = Tuple[str, int, int]
 
-STRATEGIES = ("auto", "recursive", "semantic")
+STRATEGIES = ("auto", "recursive", "semantic", "ast")
 
 # Semantic chunking knobs.
 SEMANTIC_MIN_CHUNK_CHARS = 200   # merge forward until at least this size
@@ -116,21 +117,20 @@ def semantic_chunk(
 def profile_document(text: str) -> str:
     """Heuristically pick the best strategy for a document ("auto" mode).
 
+    - Code-heavy or table-heavy content (>30% code/table lines): ast strategy.
     - Short documents: recursive (semantic segmentation needs enough sentences).
-    - Code-heavy or table-heavy content: recursive (embeddings of code lines
-      produce noisy boundaries).
     - Prose and structured docs: semantic.
     """
-    if len(text) < 1200:
-        return "recursive"
-
     lines = text.splitlines() or [text]
     code_ish = sum(
         1
         for ln in lines
         if ln.startswith(("    ", "\t", "|", "```")) or re.match(r"^\s*[{}<>#/;]", ln)
     )
-    if code_ish / len(lines) > 0.4:
+    if code_ish / len(lines) > 0.3:
+        return "ast"
+
+    if len(text) < 1200:
         return "recursive"
 
     sentence_count = len(_split_sentences(text))
@@ -154,6 +154,9 @@ def chunk_document(
         raise ValueError(f"Unknown chunking strategy: {strategy!r} (expected one of {STRATEGIES})")
 
     resolved = profile_document(text) if strategy == "auto" else strategy
+
+    if resolved == "ast":
+        return ast_chunk_document(text), "ast"
 
     if resolved == "semantic":
         if embed_fn is None:
