@@ -147,6 +147,63 @@ export async function transcribe(blob) {
   return { data, latency };
 }
 
+/**
+ * Stream audio chunks over WebSocket to /ws/transcribe in real time.
+ * @param {Function} onPartial - Callback receiving partial transcript text.
+ * @param {Function} onFinal - Callback receiving final transcript text.
+ * @param {Function} onError - Callback receiving error message.
+ * @returns {Promise<{ stop: Function }>} Control object to stop streaming.
+ */
+export async function createDictationSocket(onPartial, onFinal, onError) {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = BASE.startsWith('http')
+    ? BASE.replace(/^http/, 'ws').replace(/\/api\/?$/, '') + '/ws/transcribe'
+    : `${protocol}//${window.location.host}/ws/transcribe`;
+  const ws = new WebSocket(wsUrl);
+
+  const mediaRecorder = new MediaRecorder(stream);
+
+  ws.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'partial' && onPartial) onPartial(data.text);
+      if (data.type === 'final' && onFinal) onFinal(data.text);
+      if (data.type === 'error' && onError) onError(data.message);
+    } catch (e) {
+      console.error('STT WebSocket parse error:', e);
+    }
+  };
+
+  ws.onerror = (err) => {
+    if (onError) onError('WebSocket connection error');
+  };
+
+  mediaRecorder.ondataavailable = async (event) => {
+    if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+      const buffer = await event.data.arrayBuffer();
+      ws.send(buffer);
+    }
+  };
+
+  ws.onopen = () => {
+    mediaRecorder.start(500); // 500ms slice
+  };
+
+  return {
+    stop: () => {
+      if (mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+      stream.getTracks().forEach((track) => track.stop());
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send('EOS');
+      }
+    },
+  };
+}
+
+
 /* ── Podcast (local audio overview) ──────────────────── */
 
 /** Start generating a two-host audio overview for the given sources. */

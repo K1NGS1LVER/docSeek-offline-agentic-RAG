@@ -14,6 +14,10 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
+      '/ws': {
+        target: globalThis.process?.env?.DOCSEEK_API_TARGET || 'http://127.0.0.1:8000',
+        ws: true,
+      },
     },
   },
 })
