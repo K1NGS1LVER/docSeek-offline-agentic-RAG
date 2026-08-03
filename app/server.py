@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, File, Form, UploadFile, Header, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse, JSONResponse
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from pydantic import BaseModel
@@ -36,6 +36,7 @@ from app.core.engine import VectorEngine
 from app.core.llm import OllamaLLM
 from app.core.fusion import reciprocal_rank_fusion
 from app.core.agent import RetrievalAgent
+from app.core.graph import build_graph_data
 
 # Per-notebook runtime registry (Step 2 below) needs these.
 from collections import namedtuple
@@ -1580,6 +1581,40 @@ def list_sources(notebook_id: str = Query(...)):
         )
     sources.sort(key=lambda s: s["filename"].lower())
     return sources
+
+
+@app.get("/graph/data")
+async def get_graph_data(
+    min_similarity: float = Query(0.3, ge=0.0, le=1.0),
+    notebook_id: Optional[str] = Query(None),
+):
+    """Fetch knowledge graph nodes, similarity edges, and tag edges."""
+    try:
+        if not notebook_id:
+            nbs = notebooks.list_notebooks()
+            if nbs:
+                notebook_id = nbs[0]["id"]
+            else:
+                nb = notebooks.create_notebook("My Notebook", "📓")
+                notebook_id = nb["id"]
+        rt = get_runtime(notebook_id)
+
+        chunk_embeddings_map = getattr(rt.engine, "embeddings_map", None)
+        if chunk_embeddings_map is None and hasattr(app.state, "vector_store") and app.state.vector_store:
+            chunk_embeddings_map = getattr(app.state.vector_store, "embeddings_map", None)
+
+        data = build_graph_data(
+            db_path=rt.db_path,
+            min_similarity=min_similarity,
+            chunk_embeddings_map=chunk_embeddings_map,
+        )
+        return JSONResponse(content=data)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching graph data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.delete("/documents")
