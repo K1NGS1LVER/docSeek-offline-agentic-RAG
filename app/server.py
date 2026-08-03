@@ -188,19 +188,12 @@ def extract_text_from_upload(ext: str, content: bytes, file_path: pathlib.Path) 
         )
 
 
-# Serializes the shared-state mutations of ingestion (SQLite inserts + FAISS
-# index add + save). Parsing, OCR, and embedding run OUTSIDE this lock, so those
-# (the slow parts) still overlap across parallel uploads; only the index writes
-# serialize, which keeps the FAISS index from being corrupted by concurrency.
-_ingest_lock = threading.Lock()
-
-
 def _persist_chunks(rt: "Runtime", chunks, embeddings, safe_name, file_path, strategy_used, extra_meta=None):
     """Insert chunks + their embeddings under the ingest lock. Returns doc_ids.
 
     chunks are (text, start_char, end_char) tuples aligned with embeddings.
     """
-    with _ingest_lock:
+    with rt.lock:
         db_items = []
         for i, (chunk_text, start_char, end_char) in enumerate(chunks):
             meta = {
@@ -337,20 +330,21 @@ async def lifespan(app: FastAPI):
 def _rebuild_runtime(rt: "Runtime"):
     """Rebuild one notebook's FAISS index from all documents in its DB."""
     import faiss
-    all_docs = database.get_all_documents(rt.db_path)
-    base_index = faiss.IndexFlatIP(rt.engine.dimension)
-    rt.engine.index = faiss.IndexIDMap(base_index)
-    if not all_docs:
+    with rt.lock:
+        all_docs = database.get_all_documents(rt.db_path)
+        base_index = faiss.IndexFlatIP(rt.engine.dimension)
+        rt.engine.index = faiss.IndexIDMap(base_index)
+        if not all_docs:
+            rt.engine.save()
+            return 0
+        texts = [d["content"] for d in all_docs]
+        doc_ids = [d["id"] for d in all_docs]
+        batch_size = 64
+        for i in range(0, len(texts), batch_size):
+            embeddings = rt.engine.embed_batch(texts[i:i + batch_size])
+            rt.engine.add_to_index(embeddings, doc_ids=doc_ids[i:i + batch_size])
         rt.engine.save()
-        return 0
-    texts = [d["content"] for d in all_docs]
-    doc_ids = [d["id"] for d in all_docs]
-    batch_size = 64
-    for i in range(0, len(texts), batch_size):
-        embeddings = rt.engine.embed_batch(texts[i:i + batch_size])
-        rt.engine.add_to_index(embeddings, doc_ids=doc_ids[i:i + batch_size])
-    rt.engine.save()
-    return len(all_docs)
+        return len(all_docs)
 
 
 # ============================================================================
@@ -625,9 +619,10 @@ async def upload_multiple_files(
 def ingest_document(request: IngestRequest):
     rt = get_runtime(request.notebook_id)
     vector = rt.engine.embed(request.text)
-    doc_id = database.insert_document(rt.db_path, request.text, request.metadata)
-    rt.engine.add_to_index(vector, doc_ids=[doc_id])
-    rt.engine.save()  # Persist index changes to disk
+    with rt.lock:
+        doc_id = database.insert_document(rt.db_path, request.text, request.metadata)
+        rt.engine.add_to_index(vector, doc_ids=[doc_id])
+        rt.engine.save()  # Persist index changes to disk
     return {"status": "success", "id": doc_id}
 
 
@@ -661,7 +656,7 @@ async def ingest_documents_batch(request: BatchIngestRequest):
 
     # Persist database records and update FAISS index under the lock
     def _persist():
-        with _ingest_lock:
+        with rt.lock:
             db_items = [{"content": doc.text, "metadata": doc.metadata} for doc in request.documents]
             doc_ids = database.insert_documents_batch(rt.db_path, db_items)
             rt.engine.add_to_index(embeddings, doc_ids=doc_ids)
@@ -1438,7 +1433,7 @@ def _github_ingest_worker(notebook_id: str, repo_url: str, subpath: Optional[str
                     )
                     db_items.append({"content": chunk_text, "metadata": metadata})
 
-                with _ingest_lock:
+                with rt.lock:
                     doc_ids = database.insert_documents_batch(rt.db_path, db_items)
                     rt.engine.add_to_index(embeddings, doc_ids=doc_ids)
                 total_chunks += len(chunks)
@@ -1446,7 +1441,7 @@ def _github_ingest_worker(notebook_id: str, repo_url: str, subpath: Optional[str
             except Exception as file_err:
                 logger.error(f"Error processing {filename}: {file_err}")
 
-        with _ingest_lock:
+        with rt.lock:
             rt.engine.save()
 
         github_ingest_status["is_ingesting"] = False
