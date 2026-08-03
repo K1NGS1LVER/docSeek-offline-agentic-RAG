@@ -12,19 +12,19 @@ export default function DocumentDrawer({ node, onClose, edges = [] }) {
   );
 
   return (
-    <div className="absolute top-0 right-0 z-20 w-96 h-full bg-slate-900/95 backdrop-blur-xl border-l border-slate-800 p-6 text-slate-200 shadow-2xl flex flex-col justify-between transition-all duration-300">
+    <div className="absolute top-14 right-0 z-20 w-96 h-[calc(100vh-56px)] bg-surface/95 backdrop-blur-xl border-l border-border p-6 text-text shadow-2xl flex flex-col justify-between transition-all duration-300">
       <div className="space-y-6 overflow-y-auto pr-1">
         {/* Header */}
-        <div className="flex items-start justify-between border-b border-slate-800 pb-4">
+        <div className="flex items-start justify-between border-b border-border pb-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-cyan-500/10 border border-cyan-500/30 rounded-xl text-cyan-400">
+            <div className="p-2 bg-accent-soft border border-accent/20 rounded-xl text-accent">
               <FileText className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-100 text-sm truncate max-w-[200px]" title={node.label}>
+              <h3 className="font-serif font-medium text-text text-sm truncate max-w-[200px]" title={node.label}>
                 {node.label}
               </h3>
-              <p className="text-[11px] text-slate-400 truncate max-w-[200px] font-mono">
+              <p className="text-2xs text-text-dim truncate max-w-[200px] font-mono">
                 {node.source_file}
               </p>
             </div>
@@ -32,7 +32,7 @@ export default function DocumentDrawer({ node, onClose, edges = [] }) {
           <button
             type="button"
             onClick={onClose}
-            className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-slate-200 transition-colors"
+            className="p-1 hover:bg-surface-2 rounded-lg text-text-dim hover:text-text transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -40,26 +40,26 @@ export default function DocumentDrawer({ node, onClose, edges = [] }) {
 
         {/* Stats */}
         <div className="grid grid-cols-2 gap-3 text-xs">
-          <div className="bg-slate-950/50 border border-slate-800/80 rounded-xl p-3 space-y-1">
-            <div className="flex items-center gap-1.5 text-slate-400 text-[11px]">
-              <Database className="w-3.5 h-3.5 text-cyan-400" />
+          <div className="bg-surface-2 border border-border rounded-xl p-3 space-y-1">
+            <div className="flex items-center gap-1.5 text-text-dim text-[11px]">
+              <Database className="w-3.5 h-3.5 text-accent" />
               <span>Chunks</span>
             </div>
-            <p className="text-lg font-semibold text-slate-100 font-mono">{node.chunk_count}</p>
+            <p className="text-lg font-semibold text-text font-mono">{node.chunk_count}</p>
           </div>
-          <div className="bg-slate-950/50 border border-slate-800/80 rounded-xl p-3 space-y-1">
-            <div className="flex items-center gap-1.5 text-slate-400 text-[11px]">
-              <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+          <div className="bg-surface-2 border border-border rounded-xl p-3 space-y-1">
+            <div className="flex items-center gap-1.5 text-text-dim text-[11px]">
+              <Share2 className="w-3.5 h-3.5 text-accent" />
               <span>Links</span>
             </div>
-            <p className="text-lg font-semibold text-slate-100 font-mono">{connectedEdges.length}</p>
+            <p className="text-lg font-semibold text-text font-mono">{connectedEdges.length}</p>
           </div>
         </div>
 
         {/* Tags */}
         <div className="space-y-2">
-          <div className="flex items-center gap-1.5 text-xs text-slate-400">
-            <Tag className="w-3.5 h-3.5 text-amber-400" />
+          <div className="flex items-center gap-1.5 text-xs text-text-dim">
+            <Tag className="w-3.5 h-3.5 text-accent" />
             <span>Tags</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
@@ -67,42 +67,42 @@ export default function DocumentDrawer({ node, onClose, edges = [] }) {
               node.tags.map((tag, i) => (
                 <span
                   key={i}
-                  className="px-2 py-0.5 bg-slate-800 border border-slate-700/60 rounded-md text-[11px] text-slate-300 font-mono"
+                  className="px-2 py-0.5 bg-surface-2 border border-border rounded-md text-[11px] text-text-dim font-mono"
                 >
                   #{tag}
                 </span>
               ))
             ) : (
-              <span className="text-xs text-slate-500 italic">No tags assigned</span>
+              <span className="text-xs text-text-dim italic">No tags assigned</span>
             )}
           </div>
         </div>
 
         {/* Connected Documents */}
         <div className="space-y-2">
-          <h4 className="text-xs font-semibold text-slate-300 border-b border-slate-800/60 pb-1">
+          <h4 className="text-xs font-serif font-medium text-text border-b border-border pb-1">
             Semantic Neighbors
           </h4>
           <div className="space-y-1.5">
             {connectedEdges.length > 0 ? (
               connectedEdges.map((edge, i) => {
-                const rawNeighborId = edge.source === node.id ? edge.target : edge.source;
-                const neighborIdStr = typeof rawNeighborId === 'string' ? rawNeighborId : String(rawNeighborId?.id || rawNeighborId || '');
+                const rawNeighborId = getId(edge.source) === node.id ? getId(edge.target) : getId(edge.source);
+                const neighborIdStr = typeof rawNeighborId === 'string' ? rawNeighborId : String(rawNeighborId || '');
                 const neighborName = neighborIdStr.split('/').pop();
                 return (
                   <div
                     key={i}
-                    className="flex items-center justify-between p-2 rounded-lg bg-slate-950/40 border border-slate-800/50 text-xs"
+                    className="flex items-center justify-between p-2 rounded-lg bg-surface-2 border border-border text-xs"
                   >
-                    <span className="text-slate-300 truncate max-w-[180px] font-mono">{neighborName}</span>
-                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800/50">
+                    <span className="text-text-dim truncate max-w-[180px] font-mono">{neighborName}</span>
+                    <span className="text-2xs font-mono px-1.5 py-0.5 rounded bg-accent-soft text-accent border border-accent/20">
                       {Math.round((edge.weight || 0) * 100)}%
                     </span>
                   </div>
                 );
               })
             ) : (
-              <p className="text-xs text-slate-500 italic">No connections above cutoff</p>
+              <p className="text-xs text-text-dim italic">No connections above cutoff</p>
             )}
           </div>
         </div>
@@ -110,3 +110,4 @@ export default function DocumentDrawer({ node, onClose, edges = [] }) {
     </div>
   );
 }
+
