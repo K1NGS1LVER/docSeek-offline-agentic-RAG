@@ -17,8 +17,6 @@ export default function GraphPage() {
 
   useEffect(() => {
     let isMounted = true;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setLoading(true);
     getGraphData(minSimilarity)
       .then((data) => {
         if (isMounted) {
