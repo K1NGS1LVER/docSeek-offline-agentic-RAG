@@ -37,7 +37,11 @@ export default function WorkspaceHeader({
       </Link>
 
       <IconButton icon={ArrowLeft} onClick={() => navigate('/app')} title="All notebooks" />
-      <IconButton icon={Network} onClick={() => navigate('/graph')} title="Knowledge Graph" />
+      <IconButton
+        icon={Network}
+        onClick={() => navigate(notebook?.id ? `/app/${notebook.id}/graph` : '/graph')}
+        title="Knowledge Graph"
+      />
 
       <div className="w-px h-4 bg-border-bright" />
 

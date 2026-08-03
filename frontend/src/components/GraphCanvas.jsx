@@ -154,7 +154,7 @@ export default function GraphCanvas({
         const isMatched =
           searchQuery &&
           node.label?.toLowerCase().includes(searchQuery.toLowerCase());
-        const isTag = node.type === 'tag' || Boolean(node.is_tag);
+        const isTag = Boolean(node.is_tag);
         const radius = Math.max(6, Math.min(18, (node.chunk_count || 1) * 1.5));
 
         // Outer Glow
