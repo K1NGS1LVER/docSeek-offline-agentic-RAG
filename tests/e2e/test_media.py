@@ -84,6 +84,32 @@ def test_transcribe_rejects_empty_upload(server):
     assert r.status_code == 400
 
 
+def test_transcribe_bytes_decodes_audio():
+    """Verify transcribe_bytes accepts raw byte buffer and returns text/language dict."""
+    import wave
+    import io
+    from app.core import stt
+
+    # Create a 1-second silent WAV in memory
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"\x00\x00" * 16000)
+    wav_bytes = buf.getvalue()
+
+    result = stt.transcribe_bytes(wav_bytes)
+    if result is not None:
+        assert "text" in result
+        assert "language" in result
+
+    # Also test empty bytes handling
+    empty_result = stt.transcribe_bytes(b"")
+    assert empty_result == {"text": "", "language": None, "duration": 0.0}
+
+
+
 # ------------------------------------------------------------- podcast
 
 

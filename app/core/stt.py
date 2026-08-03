@@ -83,6 +83,30 @@ def transcribe(audio_path: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def transcribe_bytes(audio_bytes: bytes) -> Optional[Dict[str, Any]]:
+    """Transcribe raw audio bytes (WAV/WebM/OGG) to text using a temp file."""
+    import tempfile
+    import os
+
+    if not audio_bytes:
+        return {"text": "", "language": None, "duration": 0.0}
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = tmp.name
+
+    try:
+        res = transcribe(tmp_path)
+        return res
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
+
 def unload() -> bool:
     """Unload the STT model from memory if currently loaded.
 
