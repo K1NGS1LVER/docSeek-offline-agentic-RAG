@@ -100,13 +100,14 @@ def test_transcribe_bytes_decodes_audio():
     wav_bytes = buf.getvalue()
 
     result = stt.transcribe_bytes(wav_bytes)
-    if result is not None:
-        assert "text" in result
-        assert "language" in result
+    assert result is not None
+    assert "text" in result
+    assert "language" in result
 
     # Also test empty bytes handling
     empty_result = stt.transcribe_bytes(b"")
     assert empty_result == {"text": "", "language": None, "duration": 0.0}
+
 
 
 
