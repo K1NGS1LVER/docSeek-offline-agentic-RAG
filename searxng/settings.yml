@@ -1,0 +1,8 @@
+use_default_settings: true
+server:
+  secret_key: "docseek-local-dev"
+  limiter: false
+search:
+  formats:
+    - html
+    - json

@@ -29,5 +29,9 @@ button.md
 CLAUDE.md
 .claude/
 
+# SearXNG runtime data (settings.yml is tracked)
+searxng/*.db
+searxng/uwsgi.ini
+
 # Local AI-harness plugin output (not published)
 docs/superpowers/

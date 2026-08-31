@@ -142,3 +142,18 @@ DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS = float(
     os.getenv("DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS", "300")
 )
 
+# ---------------------------------------------------------------------------
+# Web Research (search the web via a local SearXNG instance, extract content,
+# and import into the notebook's RAG database).
+# ---------------------------------------------------------------------------
+
+# SearXNG endpoint. Start with: docker compose up -d
+SEARXNG_URL = os.environ.get("DOCSEEK_SEARXNG_URL", "http://localhost:8080")
+
+# Enable Crawl4AI browser fallback for JS-heavy pages (requires Playwright +
+# Chromium ~200MB). trafilatura handles 90%+ of pages without this.
+CRAWL4AI_ENABLED = os.environ.get("DOCSEEK_CRAWL4AI_ENABLED", "false").lower() == "true"
+
+# Max results per web search query.
+RESEARCH_MAX_RESULTS = int(os.environ.get("DOCSEEK_RESEARCH_MAX_RESULTS", "10"))
+
