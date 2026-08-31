@@ -57,6 +57,13 @@ else
   warn "npm not found — install Node.js 18+, then run: cd frontend && npm install"
 fi
 
+info "Checking Docker (optional, for web research with SearXNG)…"
+if command -v docker >/dev/null 2>&1; then
+  ok "docker found — run 'docker compose up -d' to start SearXNG"
+else
+  warn "docker not found — web research requires SearXNG in Docker (optional)"
+fi
+
 info "Checking Ollama (local LLM for agentic answers)…"
 if command -v ollama >/dev/null 2>&1; then
   ok "ollama found"

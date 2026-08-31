@@ -35,6 +35,7 @@ Built with **FastAPI · FAISS · Sentence-Transformers · SQLite · Ollama · Re
 - 🔎 **Hybrid retrieval.** Dense vectors (FAISS) fused with keyword search (SQLite FTS5) via Reciprocal Rank Fusion, with optional local cross-encoder reranking.
 - 📄 **Ingest almost anything.** `.txt`, `.md`, `.html`, `.docx`, `.pdf` (with on-device OCR fallback for scanned PDFs), `.pptx`, pasted text, whole GitHub repos, or web pages.
 - 🎙️ **Talk and listen.** Dictate questions with your mic (local Whisper), have answers read aloud, or generate a two-host **audio overview** of your sources (local Kokoro TTS).
+- 🔍 **Research the web.** Search the internet from inside a notebook, preview results, and import what's useful — the content gets chunked, embedded, and becomes part of your local knowledge base. Deep research mode decomposes your question into sub-queries and generates a cited report.
 - 📝 **Go deep.** Stream multi-section, cited **research reports** across your sources.
 
 ![The notebooks dashboard](docs/images/notebooks_dashboard.jpg)
@@ -52,6 +53,7 @@ Built with **FastAPI · FAISS · Sentence-Transformers · SQLite · Ollama · Re
 | **Python 3.10+** | Backend | [python.org](https://www.python.org/) |
 | **Node.js 18+** | Frontend | [nodejs.org](https://nodejs.org/) |
 | **Ollama** | Local LLM for agentic answers | [ollama.com](https://ollama.com) |
+| **Docker** | Local web research (SearXNG, optional) | [docker.com](https://docker.com) |
 | tesseract, espeak-ng, ffmpeg | OCR + audio (optional) | `brew install tesseract espeak-ng ffmpeg` |
 
 **Then, from the project root:**
@@ -63,7 +65,10 @@ Built with **FastAPI · FAISS · Sentence-Transformers · SQLite · Ollama · Re
 # 2. Pull the default local model
 ollama pull phi3:mini
 
-# 3. Launch docSeek (backend + frontend together)
+# 3. (Optional) Start SearXNG for web research
+docker compose up -d
+
+# 4. Launch docSeek (backend + frontend together)
 ./run.sh
 ```
 
@@ -116,7 +121,13 @@ ollama pull phi3:mini          # default, fast
 ollama pull qwen2.5:7b         # optional, stronger — better research reports & podcasts
 ```
 
-**6. Run it:**
+**6. Web Research Engine (optional):**
+
+```bash
+docker compose up -d           # starts SearXNG on http://localhost:8080
+```
+
+**7. Run it:**
 
 ```bash
 ./run.sh            # backend + frontend
@@ -215,6 +226,9 @@ Set via environment variables (or edit `app/core/config.py`):
 | `DOCSEEK_LLM_BASE_URL` | `http://localhost:11434/v1` | Ollama endpoint. |
 | `DOCSEEK_STT_MODEL` | `small` | faster-whisper size (`tiny`/`base`/`small`/`medium`). |
 | `DOCSEEK_TTS_VOICE_A` / `_B` | `af_heart` / `am_michael` | The two podcast host voices. |
+| `DOCSEEK_SEARXNG_URL` | `http://localhost:8080` | SearXNG endpoint for local web research. |
+| `DOCSEEK_CRAWL4AI_ENABLED` | `false` | Enable Crawl4AI browser fallback for JS-heavy pages. |
+| `DOCSEEK_RESEARCH_MAX_RESULTS` | `10` | Max results per web search query. |
 | `CORS_ORIGINS` | `localhost:5173,localhost:3000` | Allowed web origins. |
 | `ADMIN_TOKEN` | *(unset)* | Set a token to gate destructive endpoints (`/reset`, `/rebuild`, deletes). |
 
