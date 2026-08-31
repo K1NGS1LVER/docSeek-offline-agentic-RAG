@@ -30,8 +30,9 @@ from app.core.config import (
     RERANK_CANDIDATE_FACTOR,
     CHUNKING_STRATEGY,
     DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS,
+    SEARXNG_URL,
 )
-from app.core import database, parsing, chunking, reranker, stt, tts, podcast, research
+from app.core import database, parsing, chunking, reranker, stt, tts, podcast, research, web_research
 from app.core.engine import VectorEngine
 from app.core.llm import OllamaLLM
 from app.core.fusion import reciprocal_rank_fusion
@@ -266,6 +267,29 @@ class GitHubIngestRequest(BaseModel):
     notebook_id: str
     repo_url: str
     subpath: Optional[str] = None
+
+
+class WebSearchRequest(BaseModel):
+    query: str
+    notebook_id: str
+    num_results: int = 10
+
+
+class DeepResearchRequest(BaseModel):
+    query: str
+    notebook_id: str
+    num_results_per_query: int = 5
+
+
+class ImportWebResultsRequest(BaseModel):
+    notebook_id: str
+    urls: List[str]
+
+
+class SaveReportRequest(BaseModel):
+    notebook_id: str
+    query: str
+    report_markdown: str
 
 
 # ============================================================================
@@ -1699,6 +1723,148 @@ async def rebuild_index(notebook_id: str = Query(...), _: None = Depends(require
     rt = get_runtime(notebook_id)
     count = await run_in_threadpool(_rebuild_runtime, rt)
     return {"status": "success", "documents_indexed": count}
+
+
+
+# ============================================================================
+# WEB RESEARCH
+# ============================================================================
+
+
+@app.get("/web-research/health")
+async def web_research_health():
+    """Check if SearXNG is reachable for web research."""
+    available = await run_in_threadpool(web_research.is_available)
+    return {"available": available, "searxng_url": SEARXNG_URL}
+
+
+@app.post("/web-research/search")
+async def web_research_search(request: WebSearchRequest):
+    """Quick web search — returns results for preview/import."""
+    if not web_research.is_available():
+        raise HTTPException(503, "SearXNG is not available. Start it with: docker compose up -d")
+    results = await run_in_threadpool(
+        web_research.search_web, request.query, request.num_results
+    )
+    return {"query": request.query, "results": results}
+
+
+@app.post("/web-research/extract")
+async def web_research_extract(url: str = Query(...)):
+    """Extract full content from a single URL for preview."""
+    content = await run_in_threadpool(web_research.extract_content, url)
+    return content
+
+
+@app.post("/web-research/deep")
+async def web_research_deep(request: DeepResearchRequest):
+    """Deep research — LLM decomposes query, multi-searches, summarizes.
+
+    Streams progress via SSE using the same typed-event protocol as /ask.
+    """
+    if not web_research.is_available():
+        raise HTTPException(503, "SearXNG is not available. Start it with: docker compose up -d")
+
+    async def event_generator():
+        async for event in web_research.deep_research(
+            request.query, llm, request.num_results_per_query
+        ):
+            event_type = event.get("type", "trace")
+            yield {"event": event_type, "data": json.dumps(event)}
+
+    return EventSourceResponse(event_generator())
+
+
+@app.post("/web-research/import")
+async def web_research_import(request: ImportWebResultsRequest):
+    """Import web URLs into notebook. Extract → chunk → embed → store."""
+    rt = get_runtime(request.notebook_id)
+    imported = 0
+    failed = 0
+    details = []
+
+    for url in request.urls:
+        try:
+            # 1. Extract content
+            content_data = await run_in_threadpool(
+                web_research.extract_content, url
+            )
+            text = content_data.get("content", "")
+            if not text or len(text) < 50:
+                details.append({"url": url, "status": "skipped",
+                               "reason": "insufficient content"})
+                failed += 1
+                continue
+
+            # 2. Chunk using existing pipeline
+            chunks, strategy_used = await run_in_threadpool(
+                _chunk_with_strategy, rt, text, None
+            )
+            if not chunks:
+                chunks = [(text, 0, len(text))]
+                strategy_used = "none"
+
+            # 3. Batch embed
+            chunk_texts = [ct for ct, _, _ in chunks]
+            embeddings = await run_in_threadpool(rt.engine.embed_batch, chunk_texts)
+
+            # 4. Persist with web_research metadata
+            title = content_data.get("title", url)
+            doc_ids = await run_in_threadpool(
+                _persist_chunks, rt, chunks, embeddings,
+                title,  # safe_name
+                url,    # file_path (used as source_file)
+                strategy_used,
+                extra_meta={
+                    "source_type": "web_research",
+                    "source_url": url,
+                },
+            )
+
+            imported += 1
+            details.append({"url": url, "status": "imported",
+                           "title": title, "chunks": len(doc_ids)})
+        except Exception as e:
+            failed += 1
+            details.append({"url": url, "status": "failed",
+                           "reason": str(e)})
+            logger.error("Failed to import web source %s: %s", url, e)
+
+    return {"imported": imported, "failed": failed, "details": details}
+
+
+@app.post("/web-research/save-report")
+async def web_research_save_report(request: SaveReportRequest):
+    """Save a deep research report as a source in the notebook."""
+    rt = get_runtime(request.notebook_id)
+
+    # Chunk the report
+    chunks, strategy_used = await run_in_threadpool(
+        _chunk_with_strategy, rt, request.report_markdown, None
+    )
+    if not chunks:
+        chunks = [(request.report_markdown, 0, len(request.report_markdown))]
+        strategy_used = "none"
+
+    # Embed
+    chunk_texts = [ct for ct, _, _ in chunks]
+    embeddings = await run_in_threadpool(rt.engine.embed_batch, chunk_texts)
+
+    # Persist with research_report metadata
+    source_name = f"Research: {request.query[:80]}"
+    doc_ids = await run_in_threadpool(
+        _persist_chunks, rt, chunks, embeddings,
+        source_name,  # safe_name / filename
+        source_name,  # file_path / source_file
+        strategy_used,
+        extra_meta={
+            "source_type": "research_report",
+            "research_query": request.query,
+        },
+    )
+
+    return {"status": "saved", "chunks": len(doc_ids),
+            "source_name": source_name}
 
 
 # ============================================================================
