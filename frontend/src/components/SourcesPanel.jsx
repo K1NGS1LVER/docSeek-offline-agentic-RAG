@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { FileText, Plus, Trash2, Loader2, FolderOpen, RotateCcw } from 'lucide-react';
-import { deleteSource, getDocumentViewUrl } from '../lib/api';
+import { FileText, Plus, Trash2, Loader2, FolderOpen, RotateCcw, Search, Globe, ExternalLink, ChevronDown, ChevronRight, RefreshCw, Save } from 'lucide-react';
+import { deleteSource, getDocumentViewUrl, searchWeb, importWebResults, deepWebResearch, saveResearchReport } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
-import { Button, Checkbox, IconButton } from './ui';
+import { Button, Checkbox, IconButton, Segmented } from './ui';
 
 function GithubMark({ className }) {
   return (
@@ -109,6 +109,245 @@ function PendingRow({ item, onRetry, onDismiss }) {
   );
 }
 
+function WebResearchSection() {
+  const { notebookId } = useParams();
+  const { researchAvailable, refreshSources, refreshStats, addLog } = useSystem();
+  const [expanded, setExpanded] = useState(false);
+  const [query, setQuery] = useState('');
+  const [mode, setMode] = useState('quick');
+  const [results, setResults] = useState([]);
+  const [selected, setSelected] = useState(new Set());
+  const [isSearching, setIsSearching] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [traceLog, setTraceLog] = useState([]);
+  const [deepReport, setDeepReport] = useState(null);
+  const [deepQuery, setDeepQuery] = useState('');
+  const [error, setError] = useState(null);
+
+  const handleSearch = async (e) => {
+    e.preventDefault();
+    if (!query.trim() || isSearching) return;
+    setError(null);
+    setResults([]);
+    setSelected(new Set());
+    setTraceLog([]);
+    setDeepReport(null);
+    setIsSearching(true);
+
+    try {
+      if (mode === 'quick') {
+        const { data } = await searchWeb(query.trim(), notebookId);
+        setResults(data.results || []);
+      } else {
+        setDeepQuery(query.trim());
+        await deepWebResearch(notebookId, query.trim(), {
+          onTrace: (evt) => setTraceLog((prev) => [...prev, evt]),
+          onResults: (data) => {
+            setResults(data.results || []);
+            setDeepReport(data.report_markdown || null);
+          },
+        });
+      }
+    } catch (err) {
+      setError(err.message);
+      addLog(`Web research failed: ${err.message}`, 'ERROR');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleImport = async () => {
+    if (selected.size === 0 || isImporting) return;
+    setIsImporting(true);
+    try {
+      const urls = [...selected];
+      const { data } = await importWebResults(notebookId, urls);
+      addLog(`Imported ${data.imported} web source(s)`);
+      setSelected(new Set());
+      // Remove imported URLs from results
+      setResults((prev) => prev.filter((r) => !selected.has(r.url)));
+      await refreshSources();
+      await refreshStats();
+    } catch (err) {
+      setError(err.message);
+      addLog(`Web import failed: ${err.message}`, 'ERROR');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleSaveReport = async () => {
+    if (!deepReport) return;
+    try {
+      await saveResearchReport(notebookId, deepQuery, deepReport);
+      addLog('Research report saved to notebook');
+      await refreshSources();
+      await refreshStats();
+    } catch (err) {
+      addLog(`Failed to save report: ${err.message}`, 'ERROR');
+    }
+  };
+
+  const toggleSelect = (url) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
+  };
+
+  if (!researchAvailable) {
+    return (
+      <div className="px-4 py-3 border-b border-border">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2 w-full text-left text-sm text-text-muted"
+        >
+          {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          <Globe className="w-3.5 h-3.5" />
+          Web Research
+        </button>
+        {expanded && (
+          <p className="text-xs text-text-dim mt-2 ml-5">
+            Web search unavailable — start SearXNG with{' '}
+            <code className="bg-panel px-1 py-0.5 rounded text-2xs">docker compose up -d</code>
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-b border-border">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 w-full text-left px-4 py-3 text-sm font-medium text-text hover:bg-surface-2 transition-colors"
+      >
+        {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        <Globe className="w-3.5 h-3.5 text-accent" />
+        Web Research
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-3 space-y-3">
+          <form onSubmit={handleSearch} className="flex gap-2">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search the web…"
+              className="flex-1 min-w-0 h-8 px-3 text-sm bg-panel border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-accent text-text placeholder:text-text-dim"
+            />
+            <button
+              type="submit"
+              disabled={isSearching || !query.trim()}
+              className="h-8 w-8 flex items-center justify-center rounded-lg bg-accent text-on-accent disabled:opacity-50"
+            >
+              {isSearching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+            </button>
+          </form>
+
+          <Segmented
+            options={[
+              { value: 'quick', label: 'Quick' },
+              { value: 'deep', label: 'Deep' },
+            ]}
+            value={mode}
+            onChange={setMode}
+          />
+
+          {/* Trace log (deep research) */}
+          {traceLog.length > 0 && (
+            <div className="max-h-24 overflow-y-auto space-y-0.5 text-2xs font-mono text-text-muted bg-panel rounded-lg p-2">
+              {traceLog.map((t, i) => (
+                <div key={i} className="flex items-start gap-1.5">
+                  <span className="text-accent flex-shrink-0">›</span>
+                  <span className="truncate">{t.detail}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {error && (
+            <p className="text-xs text-caution bg-caution-soft px-3 py-2 rounded-lg">{error}</p>
+          )}
+
+          {/* Results */}
+          {results.length > 0 && (
+            <div className="space-y-1 max-h-60 overflow-y-auto">
+              {results.map((r) => (
+                <label
+                  key={r.url}
+                  className="flex items-start gap-2 p-2 rounded-lg hover:bg-surface-2 cursor-pointer transition-colors"
+                >
+                  <Checkbox
+                    checked={selected.has(r.url)}
+                    onChange={() => toggleSelect(r.url)}
+                    className="mt-0.5"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1">
+                      <span className="text-sm text-text truncate font-medium">{r.title}</span>
+                      <a
+                        href={r.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex-shrink-0 text-text-muted hover:text-accent"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                    <p className="text-2xs text-text-dim line-clamp-2 mt-0.5">
+                      {r.summary || r.snippet}
+                    </p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {/* Actions */}
+          {results.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={handleImport}
+                disabled={selected.size === 0 || isImporting}
+              >
+                {isImporting ? (
+                  <><Loader2 className="w-3 h-3 animate-spin mr-1" />Importing…</>
+                ) : (
+                  `Import ${selected.size || ''} selected`
+                )}
+              </Button>
+              <IconButton
+                icon={RefreshCw}
+                onClick={handleSearch}
+                title="Retry search"
+                disabled={isSearching}
+              />
+            </div>
+          )}
+
+          {/* Deep research report */}
+          {deepReport && (
+            <div className="space-y-2">
+              <div className="max-h-48 overflow-y-auto bg-panel rounded-lg p-3 text-sm text-text prose prose-sm">
+                <pre className="whitespace-pre-wrap text-xs">{deepReport}</pre>
+              </div>
+              <Button size="sm" icon={Save} onClick={handleSaveReport}>
+                Save report to notebook
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpen, onOpenPdf }) {
   const { sources, ingestStatus, uploads, retryUpload, dismissUpload } = useSystem();
   const allChecked = unchecked.size === 0;
@@ -137,6 +376,8 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpe
           Add
         </Button>
       </div>
+
+      <WebResearchSection />
 
       {sources.length > 0 && (
         <label className="flex items-center gap-3 px-6 py-3 text-sm text-text-muted border-b border-border cursor-pointer">

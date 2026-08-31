@@ -7,6 +7,7 @@ import {
   getPodcastStatus,
   getPodcasts,
   uploadFile,
+  checkResearchHealth,
 } from '../lib/api';
 
 const SystemContext = createContext(null);
@@ -42,6 +43,7 @@ export function SystemProvider({ notebookId, children }) {
   // NOT cleared by the notebook-switch reset, so an upload completes into the
   // notebook it was started in.
   const [uploads, setUploads] = useState([]);
+  const [researchAvailable, setResearchAvailable] = useState(false);
   const uploadSeq = useRef(0);
   const pumpingRef = useRef(false);
   // Always points at the currently active notebook, so an upload pool started
@@ -231,6 +233,9 @@ export function SystemProvider({ notebookId, children }) {
     refreshSources();
     refreshIngestStatus();
     refreshPodcasts();
+    checkResearchHealth()
+      .then(({ data }) => setResearchAvailable(data.available))
+      .catch(() => setResearchAvailable(false));
     // Re-attach to a podcast job that was still running before this mount.
     const saved = localStorage.getItem(podcastJobKey(notebookId));
     if (saved) {
@@ -329,6 +334,7 @@ export function SystemProvider({ notebookId, children }) {
     startUploads,
     retryUpload,
     dismissUpload,
+    researchAvailable,
   };
 
   return <SystemContext.Provider value={value}>{children}</SystemContext.Provider>;

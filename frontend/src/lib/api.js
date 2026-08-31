@@ -463,3 +463,100 @@ export function getDocumentViewUrl(notebookId, docId) {
 export function getRawDocumentUrl(notebookId, filename) {
   return `${BASE}/document/raw?notebook_id=${encodeURIComponent(notebookId)}&filename=${encodeURIComponent(filename)}`;
 }
+
+/* ── Web Research ────────────────────────────────────── */
+
+export async function checkResearchHealth() {
+  return request('/web-research/health');
+}
+
+export async function searchWeb(query, notebookId, numResults = 10) {
+  return request('/web-research/search', {
+    method: 'POST',
+    body: JSON.stringify({ query, notebook_id: notebookId, num_results: numResults }),
+  });
+}
+
+export async function extractContent(url) {
+  return request(`/web-research/extract?url=${encodeURIComponent(url)}`, {
+    method: 'POST',
+  });
+}
+
+export async function importWebResults(notebookId, urls) {
+  return request('/web-research/import', {
+    method: 'POST',
+    body: JSON.stringify({ notebook_id: notebookId, urls }),
+  });
+}
+
+export async function saveResearchReport(notebookId, query, reportMarkdown) {
+  return request('/web-research/save-report', {
+    method: 'POST',
+    body: JSON.stringify({ notebook_id: notebookId, query, report_markdown: reportMarkdown }),
+  });
+}
+
+/**
+ * Deep web research (streaming SSE). Streams trace events for progress and
+ * a final `results` event with web search findings + report.
+ *
+ * @param {string} notebookId - The notebook context
+ * @param {string} query - The research question
+ * @param {object} handlers - { onTrace(event), onResults(data) }
+ * @returns {Promise<void>}
+ */
+export async function deepWebResearch(notebookId, query, { onTrace, onResults } = {}) {
+  const url = `${BASE}/web-research/deep`;
+  const body = { query, notebook_id: notebookId };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(errBody || `HTTP ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let eventName = '';
+  let dataLines = [];
+
+  const dispatch = () => {
+    if (dataLines.length === 0) { eventName = ''; return; }
+    const rawData = dataLines.join('\n');
+    dataLines = [];
+    const name = eventName;
+    eventName = '';
+
+    let parsed;
+    try { parsed = JSON.parse(rawData); } catch { parsed = rawData; }
+
+    if (name === 'trace' && onTrace && typeof parsed === 'object') {
+      onTrace(parsed);
+    } else if (name === 'results' && onResults && typeof parsed === 'object') {
+      onResults(parsed);
+    }
+  };
+
+  const processLine = (line) => {
+    if (line === '') dispatch();
+    else if (line.startsWith('event:')) eventName = line.slice(6).trim();
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+    for (const l of lines) processLine(l);
+  }
+  dispatch();
+}
