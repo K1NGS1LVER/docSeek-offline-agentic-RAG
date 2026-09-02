@@ -15,6 +15,7 @@ import {
   Clock,
   Copy,
   Check,
+  StickyNote,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useSystem } from '../lib/SystemContext';
@@ -528,14 +529,37 @@ const ARTIFACT_TYPES = [
   },
 ];
 
-function ArtifactsTab({ selectedSources = [] }) {
+const ARTIFACT_KEY_PREFIX = 'ds_artifact_';
+const artifactKey = (id) => `${ARTIFACT_KEY_PREFIX}${id || 'default'}`;
+
+function loadSavedArtifact(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function ArtifactsTab({ selectedSources = [], onAddNote }) {
   const { notebookId } = useParams();
+  const storageKey = artifactKey(notebookId);
   const [focus, setFocus] = useState('');
   const [generating, setGenerating] = useState(null);
   const [streamText, setStreamText] = useState('');
-  const [result, setResult] = useState(null);
+  const [result, setResult] = useState(() => loadSavedArtifact(storageKey));
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [savedToNotes, setSavedToNotes] = useState(false);
+
+  // Sync result to localStorage so state persists across tab switches, sidebar collapse, or reloads
+  useEffect(() => {
+    if (result) {
+      localStorage.setItem(storageKey, JSON.stringify(result));
+    } else {
+      localStorage.removeItem(storageKey);
+    }
+  }, [result, storageKey]);
 
   const handleGenerate = async (type) => {
     if (selectedSources.length === 0) return;
@@ -588,10 +612,21 @@ function ArtifactsTab({ selectedSources = [] }) {
     }
   };
 
+  const handleSaveToNotes = () => {
+    if (!result?.content) return;
+    onAddNote?.({
+      title: result.title || 'Generated Artifact',
+      body: result.content,
+    });
+    setSavedToNotes(true);
+    setTimeout(() => setSavedToNotes(false), 2000);
+  };
+
   const handleDismiss = () => {
     setResult(null);
     setStreamText('');
     setError(null);
+    localStorage.removeItem(storageKey);
   };
 
   const generatingConfig = ARTIFACT_TYPES.find((t) => t.type === generating);
@@ -630,6 +665,12 @@ function ArtifactsTab({ selectedSources = [] }) {
             </div>
             {result && (
               <div className="flex items-center gap-1 flex-shrink-0">
+                <IconButton
+                  icon={savedToNotes ? Check : StickyNote}
+                  size="sm"
+                  onClick={handleSaveToNotes}
+                  title={savedToNotes ? 'Saved to notes!' : 'Save to notes'}
+                />
                 <IconButton
                   icon={copied ? Check : Copy}
                   size="sm"
@@ -706,6 +747,7 @@ export default function StudioPanel({
   selectedSources = [],
   questions = [],
 }) {
+  const { notebookId } = useParams();
   const [tab, setTab] = useState('notes');
   const [autoSwitched, setAutoSwitched] = useState(false);
 
@@ -736,7 +778,13 @@ export default function StudioPanel({
       <div className="flex-1 overflow-y-auto px-4 pb-4 pt-2">
         {tab === 'chat' && <ChatTab questions={questions} />}
         {tab === 'notes' && <NotesTab notes={notes} onAdd={onAddNote} onDelete={onDeleteNote} />}
-        {tab === 'artifacts' && <ArtifactsTab selectedSources={selectedSources} />}
+        {tab === 'artifacts' && (
+          <ArtifactsTab
+            key={notebookId || 'default'}
+            selectedSources={selectedSources}
+            onAddNote={onAddNote}
+          />
+        )}
         {tab === 'audio' && <AudioTab selectedSources={selectedSources} />}
         {tab === 'engine' && <EngineTab />}
       </div>
