@@ -197,6 +197,14 @@ function WebResearchSection() {
     });
   };
 
+  const toggleSelectAll = () => {
+    if (results.length > 0 && selected.size === results.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(results.map((r) => r.url)));
+    }
+  };
+
   if (!researchAvailable) {
     return (
       <div className="px-4 py-3 border-b border-border">
@@ -275,36 +283,54 @@ function WebResearchSection() {
 
           {/* Results */}
           {results.length > 0 && (
-            <div className="space-y-1 max-h-60 overflow-y-auto">
-              {results.map((r) => (
-                <label
-                  key={r.url}
-                  className="flex items-start gap-2 p-2 rounded-lg hover:bg-surface-2 cursor-pointer transition-colors"
-                >
+            <div className="space-y-2">
+              <div className="flex items-center justify-between px-1 py-1 border-b border-border/50 text-xs text-text-muted">
+                <label className="flex items-center gap-2 cursor-pointer hover:text-text transition-colors">
                   <Checkbox
-                    checked={selected.has(r.url)}
-                    onChange={() => toggleSelect(r.url)}
-                    className="mt-0.5"
+                    checked={results.length > 0 && selected.size === results.length}
+                    onChange={toggleSelectAll}
                   />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1">
-                      <span className="text-sm text-text truncate font-medium">{r.title}</span>
-                      <a
-                        href={r.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex-shrink-0 text-text-muted hover:text-accent"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                    <p className="text-2xs text-text-dim line-clamp-2 mt-0.5">
-                      {r.summary || r.snippet}
-                    </p>
-                  </div>
+                  <span className="font-medium">Select all ({results.length})</span>
                 </label>
-              ))}
+                {selected.size > 0 && (
+                  <span className="text-2xs font-mono text-accent">
+                    {selected.size} selected
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-1.5 max-h-[28rem] overflow-y-auto pr-1">
+                {results.map((r) => (
+                  <label
+                    key={r.url}
+                    className="flex items-start gap-2.5 p-2 rounded-lg hover:bg-surface-2 cursor-pointer transition-colors border border-transparent hover:border-border/40"
+                  >
+                    <Checkbox
+                      checked={selected.has(r.url)}
+                      onChange={() => toggleSelect(r.url)}
+                      className="mt-0.5"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-sm text-text truncate font-medium">{r.title}</span>
+                        <a
+                          href={r.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex-shrink-0 text-text-muted hover:text-accent p-0.5"
+                          title="Open URL in new tab"
+                        >
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                      <p className="text-2xs text-text-dim line-clamp-3 mt-1 leading-relaxed">
+                        {r.summary || r.snippet}
+                      </p>
+                    </div>
+                  </label>
+                ))}
+              </div>
             </div>
           )}
 
@@ -334,8 +360,8 @@ function WebResearchSection() {
           {/* Deep research report */}
           {deepReport && (
             <div className="space-y-2">
-              <div className="max-h-48 overflow-y-auto bg-panel rounded-lg p-3 text-sm text-text prose prose-sm">
-                <pre className="whitespace-pre-wrap text-xs">{deepReport}</pre>
+              <div className="max-h-80 overflow-y-auto bg-panel rounded-lg p-3 text-sm text-text prose prose-sm border border-border/50">
+                <pre className="whitespace-pre-wrap text-xs font-mono leading-relaxed">{deepReport}</pre>
               </div>
               <Button size="sm" icon={Save} onClick={handleSaveReport}>
                 Save report to notebook
