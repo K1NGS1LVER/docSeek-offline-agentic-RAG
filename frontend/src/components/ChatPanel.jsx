@@ -814,7 +814,7 @@ export default function ChatPanel({
   const canType = selectedCount > 0;
 
   return (
-    <section className="flex-1 min-w-0 flex flex-col">
+    <section className="flex-1 min-w-[380px] flex flex-col">
       {messages.length > 0 && (
         <div className="flex-shrink-0 flex items-center justify-end px-6 pt-4">
           <IconButton icon={Trash2} onClick={() => setClearOpen(true)} title="Clear chat" />
@@ -996,16 +996,18 @@ export default function ChatPanel({
             disabled={isSearching || !canType}
             className="flex-1 min-w-0 bg-transparent text-base text-text placeholder:text-text-muted focus:outline-none disabled:text-disabled-fg"
           />
-          <div className="flex-shrink-0">
-            <Segmented
+          <div className="relative flex-shrink-0 flex items-center">
+            <select
               value={mode}
-              onChange={setMode}
-              options={[
-                { value: 'ask', label: 'Ask' },
-                { value: 'search', label: 'Search' },
-                { value: 'research', label: 'Research' },
-              ]}
-            />
+              onChange={(e) => setMode(e.target.value)}
+              className="h-8 pl-3 pr-7 bg-surface-2 border border-border/80 hover:border-border-bright rounded-lg text-xs font-medium text-text appearance-none cursor-pointer focus:outline-none focus:border-accent transition-colors"
+              title="Select search or generation mode"
+            >
+              <option value="ask" className="bg-surface text-text">Ask</option>
+              <option value="search" className="bg-surface text-text">Search</option>
+              <option value="research" className="bg-surface text-text">Research</option>
+            </select>
+            <ChevronDown className="w-3.5 h-3.5 text-text-muted pointer-events-none absolute right-2" />
           </div>
           <select
             value={topK}

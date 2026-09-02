@@ -21,6 +21,8 @@ const DEFAULT_STUDIO_WIDTH = 380;
 const MIN_STUDIO_WIDTH = 280;
 const MAX_STUDIO_WIDTH = 750;
 
+const MIN_CHAT_WIDTH = 380;
+
 const PANEL_TRANSITION = { duration: 0.2, ease: 'easeInOut' };
 
 function ResizeHandle({ onMouseDown, side = 'right' }) {
@@ -121,10 +123,15 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
       setIsResizingSources(true);
       const startX = e.clientX;
       const startWidth = sourcesWidth;
+      const currentStudio = studioOpen ? studioWidth : 0;
+      const maxAllowed = Math.min(
+        MAX_SOURCES_WIDTH,
+        Math.max(MIN_SOURCES_WIDTH, window.innerWidth - currentStudio - MIN_CHAT_WIDTH)
+      );
 
       const onMouseMove = (moveEvent) => {
         const delta = moveEvent.clientX - startX;
-        const newWidth = Math.min(Math.max(startWidth + delta, MIN_SOURCES_WIDTH), MAX_SOURCES_WIDTH);
+        const newWidth = Math.min(Math.max(startWidth + delta, MIN_SOURCES_WIDTH), maxAllowed);
         setSourcesWidth(newWidth);
       };
 
@@ -141,7 +148,7 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
       window.addEventListener('mousemove', onMouseMove);
       window.addEventListener('mouseup', onMouseUp);
     },
-    [sourcesWidth]
+    [sourcesWidth, studioOpen, studioWidth]
   );
 
   // Drag-to-resize handle for StudioPanel (right dock)
@@ -151,10 +158,15 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
       setIsResizingStudio(true);
       const startX = e.clientX;
       const startWidth = studioWidth;
+      const currentSources = sourcesOpen ? sourcesWidth : 0;
+      const maxAllowed = Math.min(
+        MAX_STUDIO_WIDTH,
+        Math.max(MIN_STUDIO_WIDTH, window.innerWidth - currentSources - MIN_CHAT_WIDTH)
+      );
 
       const onMouseMove = (moveEvent) => {
         const delta = startX - moveEvent.clientX;
-        const newWidth = Math.min(Math.max(startWidth + delta, MIN_STUDIO_WIDTH), MAX_STUDIO_WIDTH);
+        const newWidth = Math.min(Math.max(startWidth + delta, MIN_STUDIO_WIDTH), maxAllowed);
         setStudioWidth(newWidth);
       };
 
@@ -171,7 +183,7 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
       window.addEventListener('mousemove', onMouseMove);
       window.addEventListener('mouseup', onMouseUp);
     },
-    [studioWidth]
+    [sourcesOpen, sourcesWidth, studioWidth]
   );
 
   // [ / ] toggle the sidebars, ignored while typing anywhere.

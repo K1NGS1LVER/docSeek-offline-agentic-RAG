@@ -824,11 +824,11 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
         )}
 
         {/* Full-Height Scrollable Markdown Content */}
-        <div className="flex-1 overflow-y-auto bg-panel border border-border/70 rounded-xl p-4 text-xs text-text leading-relaxed prose prose-invert max-w-none">
+        <div className="flex-1 overflow-y-auto bg-surface border border-border/70 rounded-xl p-5 answer-prose select-text">
           {generating && !displayContent && (
-            <div className="flex items-center justify-center h-32 gap-2 text-text-muted">
+            <div className="flex items-center justify-center h-32 gap-2 text-text-muted font-sans text-sm">
               <Loader2 className="w-4 h-4 text-accent animate-spin" />
-              <span className="text-xs">Generating document from sources…</span>
+              <span>Generating document from sources…</span>
             </div>
           )}
           {displayContent ? (
