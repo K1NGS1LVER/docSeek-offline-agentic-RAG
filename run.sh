@@ -9,6 +9,17 @@ if [ ! -f "$PYTHON" ]; then
     exit 1
 fi
 
+if [ ! -d "frontend/node_modules" ]; then
+    echo "==> Installing frontend dependencies..."
+    (cd frontend && npm install)
+fi
+
+# Check if Ollama is running
+if ! curl -s http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+    echo "==> Warning: Ollama is not running on http://127.0.0.1:11434."
+    echo "    Make sure to run 'ollama serve' for local LLM answers, suggestions, and artifacts."
+fi
+
 # Start SearXNG for web research if Docker daemon is available
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     echo "==> Starting SearXNG search engine (Docker)..."
@@ -31,6 +42,7 @@ for i in $(seq 1 30); do
     sleep 0.5
 done
 
+echo "==> Frontend launching on http://localhost:5173"
 (cd frontend && npm run dev) 2>&1 | sed -u 's/^/[frontend] /' &
 
 wait
