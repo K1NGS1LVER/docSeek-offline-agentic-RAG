@@ -8,7 +8,7 @@ from app.core import tts
 
 def test_audio_idle_timeout_config_default():
     assert hasattr(config, "DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS")
-    assert config.DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS == 300.0
+    assert config.DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS == 60.0
 
 
 def test_stt_unload_and_idle_check():
