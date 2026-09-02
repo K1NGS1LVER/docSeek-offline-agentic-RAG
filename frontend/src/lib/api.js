@@ -334,17 +334,18 @@ export async function search(notebookId, query, k = 5, rerank = false, sourceFil
  * @param {string} query - The user's question
  * @param {number|null} k - Number of chunks to retrieve (null = agent decides)
  * @param {function} onChunk - Called with the accumulated answer text
- * @param {object} [handlers] - Optional { onTrace(event), onSources(list), agentic, sourceFiles }
+ * @param {object} [handlers] - Optional { onTrace(event), onSources(list), onFollowups(list), agentic, sourceFiles }
  * @returns {Promise<{data: string, latency: number}>}
  */
 export async function ask(notebookId, query, k = null, onChunk, handlers = {}) {
-  const { onTrace, onSources, agentic = null, sourceFiles = null } = handlers;
+  const { onTrace, onSources, onFollowups, agentic = null, sourceFiles = null } = handlers;
   return streamTypedSSE({
     url: `${BASE}/ask`,
     body: { query, k, agentic, source_files: sourceFiles, notebook_id: notebookId },
     onChunk,
     onTrace,
     onSources,
+    onFollowups,
   });
 }
 
@@ -356,26 +357,28 @@ export async function ask(notebookId, query, k = null, onChunk, handlers = {}) {
  * @param {string} notebookId - The notebook to scope retrieval to
  * @param {string} query - The research question
  * @param {function} onChunk - Called with the accumulated report markdown
- * @param {object} [handlers] - Optional { onTrace(event), onSources(list), sourceFiles }
+ * @param {object} [handlers] - Optional { onTrace(event), onSources(list), onFollowups(list), sourceFiles }
  * @returns {Promise<{data: string, latency: number}>}
  */
 export async function research(notebookId, query, onChunk, handlers = {}) {
-  const { onTrace, onSources, sourceFiles = null } = handlers;
+  const { onTrace, onSources, onFollowups, sourceFiles = null } = handlers;
   return streamTypedSSE({
     url: `${BASE}/research`,
     body: { query, source_files: sourceFiles, notebook_id: notebookId },
     onChunk,
     onTrace,
     onSources,
+    onFollowups,
   });
 }
 
 /**
- * Shared typed-SSE streamer for /ask and /research. Dispatches `trace` and
- * `sources` events to callbacks and accumulates unnamed events (JSON-encoded
- * text deltas) into the answer text; typed events never leak into the text.
+ * Shared typed-SSE streamer for /ask and /research. Dispatches `trace`,
+ * `sources`, and `followups` events to callbacks and accumulates unnamed
+ * events (JSON-encoded text deltas) into the answer text; typed events never
+ * leak into the text.
  */
-async function streamTypedSSE({ url, body, onChunk, onTrace, onSources }) {
+async function streamTypedSSE({ url, body, onChunk, onTrace, onSources, onFollowups }) {
   const start = performance.now();
 
   const res = await fetch(url, {
@@ -417,6 +420,11 @@ async function streamTypedSSE({ url, body, onChunk, onTrace, onSources }) {
       if (onTrace && typeof parsed === 'object') onTrace(parsed);
     } else if (name === 'sources') {
       if (onSources && Array.isArray(parsed)) onSources(parsed);
+    } else if (name === 'followups') {
+      try {
+        const followups = Array.isArray(parsed) ? parsed : JSON.parse(rawData);
+        if (onFollowups) onFollowups(followups);
+      } catch { /* skip malformed */ }
     } else if (typeof parsed === 'string') {
       // Unnamed events carry JSON-encoded answer text deltas; anything else
       // is a typed payload that must never leak into the answer text.
@@ -450,6 +458,74 @@ async function streamTypedSSE({ url, body, onChunk, onTrace, onSources }) {
 
   const latency = Math.round(performance.now() - start);
   return { data: accumulated, latency };
+}
+
+/* ── Studio Artifacts & Suggestions ─────────────────── */
+
+/** Fetch LLM-generated starter questions for a notebook. */
+export async function getSuggestions(notebookId) {
+  return request(`/suggestions?notebook_id=${encodeURIComponent(notebookId)}`);
+}
+
+/**
+ * Generate a studio artifact (briefing, study_guide, faq, timeline).
+ * Streams SSE events; calls onData for each text chunk, onDone when complete.
+ */
+export async function generateArtifact(notebookId, artifactType, focus, { onData, onDone, signal } = {}) {
+  const res = await fetch(`${BASE}/artifacts/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      notebook_id: notebookId,
+      artifact_type: artifactType,
+      focus: focus || null,
+    }),
+    signal,
+  });
+
+  if (!res.ok) throw new Error(`Artifact generation failed: HTTP ${res.status}`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data:')) {
+        const payload = line.slice(5).trim();
+        if (!payload) continue;
+        try {
+          const parsed = JSON.parse(payload);
+          if (typeof parsed === 'string') {
+            onData?.(parsed);
+          } else if (parsed && (parsed.full_text !== undefined || parsed.title)) {
+            onDone?.(parsed);
+          }
+        } catch { /* skip malformed */ }
+      }
+    }
+  }
+
+  if (buffer.startsWith('data:')) {
+    const payload = buffer.slice(5).trim();
+    if (payload) {
+      try {
+        const parsed = JSON.parse(payload);
+        if (typeof parsed === 'string') {
+          onData?.(parsed);
+        } else if (parsed && (parsed.full_text !== undefined || parsed.title)) {
+          onDone?.(parsed);
+        }
+      } catch { /* skip malformed */ }
+    }
+  }
 }
 
 /* ── Index Management ────────────────────────────────── */
