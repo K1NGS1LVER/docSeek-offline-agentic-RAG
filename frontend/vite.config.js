@@ -26,7 +26,7 @@ export default defineConfig({
         target: globalThis.process?.env?.DOCSEEK_API_TARGET || 'http://127.0.0.1:8000',
         ws: true,
         configure: (proxy) => {
-          proxy.on('error', (err) => {
+          proxy.on('error', () => {
             // Silently ignore transient websocket reconnect attempts on startup
           });
         },
