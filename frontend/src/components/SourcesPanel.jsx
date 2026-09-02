@@ -119,6 +119,8 @@ function WebResearchSection({ onViewSources }) {
     addLog,
     researchState,
     updateResearchState,
+    ingestStatus,
+    refreshIngestStatus,
   } = useSystem();
 
   const {
@@ -196,8 +198,10 @@ function WebResearchSection({ onViewSources }) {
   const handleImport = async () => {
     if (selectedUrls.length === 0 || isImporting) return;
     updateResearchState({ isImporting: true });
+    setLastImportCount(null);
     try {
       const urls = [...selectedUrls];
+      refreshIngestStatus();
       const { data } = await importWebResults(notebookId, urls);
       addLog(`Imported ${data.imported} web source(s)`);
       setLastImportCount(data.imported);
@@ -209,9 +213,11 @@ function WebResearchSection({ onViewSources }) {
       }));
       await refreshSources();
       await refreshStats();
+      await refreshIngestStatus();
     } catch (err) {
       updateResearchState({ error: err.message, isImporting: false });
       addLog(`Web import failed: ${err.message}`, 'ERROR');
+      await refreshIngestStatus();
     }
   };
 
@@ -265,6 +271,19 @@ function WebResearchSection({ onViewSources }) {
       </div>
     );
   }
+
+  const computeDeepProgress = () => {
+    if (!isSearching || mode !== 'deep' || traceLog.length === 0) return null;
+    const last = traceLog[traceLog.length - 1];
+    let pct = 15;
+    if (last.step === 'search') pct = 25;
+    else if (last.step === 'search_done') pct = 45;
+    else if (last.step === 'extract') pct = 65;
+    else if (last.step === 'summarize') pct = 82;
+    else if (last.step === 'report') pct = 94;
+    return { pct, detail: last.detail, step: last.step };
+  };
+  const deepProgress = computeDeepProgress();
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-surface">
@@ -332,6 +351,60 @@ function WebResearchSection({ onViewSources }) {
                 <span className="truncate">{t.detail}</span>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* Live Ingestion Progress Bar */}
+        {(isImporting || ingestStatus?.is_ingesting) && (
+          <div className="bg-panel border border-accent/40 rounded-xl p-3 space-y-2">
+            <div className="flex items-center justify-between font-mono text-2xs text-accent">
+              <span className="flex items-center gap-2 font-medium">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span className="truncate max-w-[190px]">
+                  {ingestStatus?.message || 'Ingesting web sources...'}
+                </span>
+              </span>
+              <span className="text-text font-semibold flex-shrink-0">
+                {ingestStatus?.total ? `${ingestStatus.progress}/${ingestStatus.total}` : 'in progress'}
+              </span>
+            </div>
+            <div className="h-1.5 bg-surface rounded-full overflow-hidden">
+              <div
+                className="h-full bg-accent transition-all duration-300"
+                style={{
+                  width: `${ingestStatus?.total ? Math.max(6, (ingestStatus.progress / ingestStatus.total) * 100) : 35}%`,
+                }}
+              />
+            </div>
+            {ingestStatus?.current_file && (
+              <p className="text-2xs text-text-dim truncate font-mono">
+                › {ingestStatus.current_file}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Live Deep Research Progress Bar */}
+        {deepProgress && (
+          <div className="bg-panel border border-accent/40 rounded-xl p-3 space-y-2">
+            <div className="flex items-center justify-between font-mono text-2xs text-accent">
+              <span className="flex items-center gap-2 font-medium">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Deep Research in progress...</span>
+              </span>
+              <span className="text-text font-semibold flex-shrink-0">
+                {deepProgress.pct}%
+              </span>
+            </div>
+            <div className="h-1.5 bg-surface rounded-full overflow-hidden">
+              <div
+                className="h-full bg-accent transition-all duration-300"
+                style={{ width: `${deepProgress.pct}%` }}
+              />
+            </div>
+            <p className="text-2xs text-text-dim truncate font-mono">
+              › {deepProgress.detail}
+            </p>
           </div>
         )}
 
@@ -457,11 +530,11 @@ function WebResearchSection({ onViewSources }) {
           <Button
             size="sm"
             onClick={handleImport}
-            disabled={selectedUrls.length === 0 || isImporting}
+            disabled={selectedUrls.length === 0 || isImporting || ingestStatus?.is_ingesting}
             className="flex-1"
           >
-            {isImporting ? (
-              <><Loader2 className="w-3 h-3 animate-spin mr-1.5" />Importing…</>
+            {isImporting || ingestStatus?.is_ingesting ? (
+              <><Loader2 className="w-3 h-3 animate-spin mr-1.5" />Ingesting {ingestStatus?.total ? `(${ingestStatus.progress}/${ingestStatus.total})` : '…'}</>
             ) : (
               `Import ${selectedUrls.length > 0 ? `${selectedUrls.length} ` : ''}selected`
             )}
@@ -589,37 +662,37 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpe
               </>
             )}
           </div>
-
-          {ingestStatus?.is_ingesting && (
-            <div className="flex-shrink-0 px-6 py-3 border-t border-border space-y-2 bg-surface">
-              <div className="flex items-center justify-between font-mono text-2xs text-accent">
-                <span className="flex items-center gap-2">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  ingesting
-                </span>
-                <span className="text-text-muted">
-                  {ingestStatus.progress}/{ingestStatus.total}
-                </span>
-              </div>
-              <div className="h-1 bg-panel rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-accent transition-all"
-                  style={{
-                    width: `${ingestStatus.total ? (ingestStatus.progress / ingestStatus.total) * 100 : 0}%`,
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="flex-shrink-0 flex items-center justify-between px-6 py-3 border-t border-border font-mono text-2xs uppercase tracking-[0.1em] text-text-muted bg-surface">
-            <span>{sources.length} source{sources.length !== 1 ? 's' : ''}</span>
-            <span>{totalChunks} chunks</span>
-          </div>
         </>
       ) : (
         <WebResearchSection onViewSources={() => setTab('sources')} />
       )}
+
+      {ingestStatus?.is_ingesting && (
+        <div className="flex-shrink-0 px-4 py-2.5 border-t border-border space-y-1.5 bg-surface">
+          <div className="flex items-center justify-between font-mono text-2xs text-accent">
+            <span className="flex items-center gap-2">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              <span className="truncate max-w-[200px]">{ingestStatus.message || 'ingesting'}</span>
+            </span>
+            <span className="text-text-muted font-semibold">
+              {ingestStatus.progress}/{ingestStatus.total}
+            </span>
+          </div>
+          <div className="h-1 bg-panel rounded-full overflow-hidden">
+            <div
+              className="h-full bg-accent transition-all duration-300"
+              style={{
+                width: `${ingestStatus.total ? Math.max(5, (ingestStatus.progress / ingestStatus.total) * 100) : 30}%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      <div className="flex-shrink-0 flex items-center justify-between px-6 py-3 border-t border-border font-mono text-2xs uppercase tracking-[0.1em] text-text-muted bg-surface">
+        <span>{sources.length} source{sources.length !== 1 ? 's' : ''}</span>
+        <span>{totalChunks} chunks</span>
+      </div>
     </aside>
   );
 }

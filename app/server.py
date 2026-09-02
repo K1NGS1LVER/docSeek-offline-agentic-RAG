@@ -1820,58 +1820,92 @@ async def web_research_deep(request: DeepResearchRequest):
 
 @app.post("/web-research/import")
 async def web_research_import(request: ImportWebResultsRequest):
-    """Import web URLs into notebook. Extract → chunk → embed → store."""
+    """Import web URLs into notebook. Extract → chunk → embed → store with real-time progress."""
     rt = get_runtime(request.notebook_id)
     imported = 0
     failed = 0
     details = []
+    total = len(request.urls)
 
-    for url in request.urls:
-        try:
-            # 1. Extract content
-            content_data = await run_in_threadpool(
-                web_research.extract_content, url
-            )
-            text = content_data.get("content", "")
-            if not text or len(text) < 50:
-                details.append({"url": url, "status": "skipped",
-                               "reason": "insufficient content"})
+    github_ingest_status.update({
+        "is_ingesting": True,
+        "current_file": f"Importing 0/{total} web sources...",
+        "progress": 0,
+        "total": total,
+        "message": f"Starting web import for {total} source(s)...",
+        "error": None,
+        "notebook_id": request.notebook_id,
+    })
+
+    try:
+        for idx, url in enumerate(request.urls):
+            github_ingest_status.update({
+                "current_file": url,
+                "progress": idx,
+                "message": f"Extracting ({idx + 1}/{total}): {url}",
+            })
+            try:
+                # 1. Extract content
+                content_data = await run_in_threadpool(
+                    web_research.extract_content, url
+                )
+                text = content_data.get("content", "")
+                if not text or len(text) < 50:
+                    details.append({"url": url, "status": "skipped",
+                                   "reason": "insufficient content"})
+                    failed += 1
+                    continue
+
+                title = content_data.get("title", url)
+                github_ingest_status.update({
+                    "current_file": title,
+                    "message": f"Embedding ({idx + 1}/{total}): {title[:40]}",
+                })
+
+                # 2. Chunk using existing pipeline
+                chunks, strategy_used = await run_in_threadpool(
+                    _chunk_with_strategy, rt, text, None
+                )
+                if not chunks:
+                    chunks = [(text, 0, len(text))]
+                    strategy_used = "none"
+
+                # 3. Batch embed
+                chunk_texts = [ct for ct, _, _ in chunks]
+                embeddings = await run_in_threadpool(rt.engine.embed_batch, chunk_texts)
+
+                # 4. Persist with web_research metadata
+                doc_ids = await run_in_threadpool(
+                    _persist_chunks, rt, chunks, embeddings,
+                    title,  # safe_name
+                    url,    # file_path (used as source_file)
+                    strategy_used,
+                    extra_meta={
+                        "source_type": "web_research",
+                        "source_url": url,
+                    },
+                )
+
+                imported += 1
+                details.append({"url": url, "status": "imported",
+                               "title": title, "chunks": len(doc_ids)})
+                github_ingest_status.update({
+                    "progress": idx + 1,
+                    "message": f"Ingested ({idx + 1}/{total}): {title[:40]}",
+                })
+            except Exception as e:
                 failed += 1
-                continue
+                details.append({"url": url, "status": "failed",
+                               "reason": str(e)})
+    finally:
+        github_ingest_status.update({
+            "is_ingesting": False,
+            "current_file": "",
+            "progress": total,
+            "message": f"Web import complete ({imported}/{total} sources)",
+        })
+        await run_in_threadpool(clear_model_memory)
 
-            # 2. Chunk using existing pipeline
-            chunks, strategy_used = await run_in_threadpool(
-                _chunk_with_strategy, rt, text, None
-            )
-            if not chunks:
-                chunks = [(text, 0, len(text))]
-                strategy_used = "none"
-
-            # 3. Batch embed
-            chunk_texts = [ct for ct, _, _ in chunks]
-            embeddings = await run_in_threadpool(rt.engine.embed_batch, chunk_texts)
-
-            # 4. Persist with web_research metadata
-            title = content_data.get("title", url)
-            doc_ids = await run_in_threadpool(
-                _persist_chunks, rt, chunks, embeddings,
-                title,  # safe_name
-                url,    # file_path (used as source_file)
-                strategy_used,
-                extra_meta={
-                    "source_type": "web_research",
-                    "source_url": url,
-                },
-            )
-
-            imported += 1
-            details.append({"url": url, "status": "imported",
-                           "title": title, "chunks": len(doc_ids)})
-        except Exception as e:
-            failed += 1
-            details.append({"url": url, "status": "failed",
-                           "reason": str(e)})
-    await run_in_threadpool(clear_model_memory)
     return {"imported": imported, "failed": failed, "details": details}
 
 
@@ -1880,33 +1914,53 @@ async def web_research_save_report(request: SaveReportRequest):
     """Save a deep research report as a source in the notebook."""
     rt = get_runtime(request.notebook_id)
 
-    # Chunk the report
-    chunks, strategy_used = await run_in_threadpool(
-        _chunk_with_strategy, rt, request.report_markdown, None
-    )
-    if not chunks:
-        chunks = [(request.report_markdown, 0, len(request.report_markdown))]
-        strategy_used = "none"
+    github_ingest_status.update({
+        "is_ingesting": True,
+        "current_file": f"Research: {request.query[:40]}",
+        "progress": 0,
+        "total": 1,
+        "message": f"Saving research report: {request.query[:35]}...",
+        "error": None,
+        "notebook_id": request.notebook_id,
+    })
 
-    # Embed
-    chunk_texts = [ct for ct, _, _ in chunks]
-    embeddings = await run_in_threadpool(rt.engine.embed_batch, chunk_texts)
+    try:
+        # Chunk the report
+        chunks, strategy_used = await run_in_threadpool(
+            _chunk_with_strategy, rt, request.report_markdown, None
+        )
+        if not chunks:
+            chunks = [(request.report_markdown, 0, len(request.report_markdown))]
+            strategy_used = "none"
 
-    # Persist with research_report metadata
-    source_name = f"Research: {request.query[:80]}"
-    doc_ids = await run_in_threadpool(
-        _persist_chunks, rt, chunks, embeddings,
-        source_name,  # safe_name / filename
-        source_name,  # file_path / source_file
-        strategy_used,
-        extra_meta={
-            "source_type": "research_report",
-            "research_query": request.query,
-        },
-    )
+        # Embed
+        chunk_texts = [ct for ct, _, _ in chunks]
+        embeddings = await run_in_threadpool(rt.engine.embed_batch, chunk_texts)
 
-    return {"status": "saved", "chunks": len(doc_ids),
-            "source_name": source_name}
+        # Persist with research_report metadata
+        source_name = f"Research: {request.query[:80]}"
+        doc_ids = await run_in_threadpool(
+            _persist_chunks, rt, chunks, embeddings,
+            source_name,  # safe_name / filename
+            source_name,  # file_path / source_file
+            strategy_used,
+            extra_meta={
+                "source_type": "research_report",
+                "research_query": request.query,
+            },
+        )
+        github_ingest_status.update({
+            "progress": 1,
+            "message": f"Saved research report ({len(doc_ids)} chunks)",
+        })
+        return {"status": "saved", "chunks": len(doc_ids),
+                "source_name": source_name}
+    finally:
+        github_ingest_status.update({
+            "is_ingesting": False,
+            "current_file": "",
+        })
+        await run_in_threadpool(clear_model_memory)
 
 
 # ============================================================================
