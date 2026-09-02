@@ -1,9 +1,25 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Trash2, Loader2, Mic, Download, AlertCircle, X, RefreshCw } from 'lucide-react';
+import {
+  Plus,
+  Trash2,
+  Loader2,
+  Mic,
+  Download,
+  AlertCircle,
+  X,
+  RefreshCw,
+  FileText,
+  BookOpen,
+  HelpCircle,
+  Clock,
+  Copy,
+  Check,
+} from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { useSystem } from '../lib/SystemContext';
-import { getPodcastAudioUrl, getMemoryStats, clearMemory } from '../lib/api';
-import { Button, SectionLabel, Segmented, inputCls, textareaCls } from './ui';
+import { getPodcastAudioUrl, getMemoryStats, clearMemory, generateArtifact } from '../lib/api';
+import { Button, IconButton, SectionLabel, Segmented, inputCls, textareaCls } from './ui';
 
 function NoteCard({ note, onDelete }) {
   const [expanded, setExpanded] = useState(false);
@@ -472,6 +488,217 @@ function ChatTab({ questions }) {
   );
 }
 
+/* ── Artifacts Generator ────────────────────────────── */
+
+function downloadMarkdown(title, text) {
+  const name = `${(title || 'artifact').replace(/[^a-z0-9]+/gi, '-').toLowerCase().slice(0, 60)}.md`;
+  const blob = new Blob([text], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+const ARTIFACT_TYPES = [
+  {
+    type: 'briefing',
+    label: 'Briefing Doc',
+    icon: FileText,
+    desc: 'A structured executive summary of your sources.',
+  },
+  {
+    type: 'study_guide',
+    label: 'Study Guide',
+    icon: BookOpen,
+    desc: 'Key concepts, vocabulary, review questions, and essay prompts.',
+  },
+  {
+    type: 'faq',
+    label: 'FAQ',
+    icon: HelpCircle,
+    desc: 'Frequently asked questions with grounded answers.',
+  },
+  {
+    type: 'timeline',
+    label: 'Timeline',
+    icon: Clock,
+    desc: 'Chronological sequence of events and milestones.',
+  },
+];
+
+function ArtifactsTab({ selectedSources = [] }) {
+  const { notebookId } = useParams();
+  const [focus, setFocus] = useState('');
+  const [generating, setGenerating] = useState(null);
+  const [streamText, setStreamText] = useState('');
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleGenerate = async (type) => {
+    if (selectedSources.length === 0) return;
+    setError(null);
+    setGenerating(type);
+    setStreamText('');
+    setResult(null);
+
+    const typeConfig = ARTIFACT_TYPES.find((t) => t.type === type);
+    let finalResult = null;
+    let accumulated = '';
+
+    try {
+      await generateArtifact(notebookId, type, focus.trim(), {
+        onData: (chunk) => {
+          accumulated += chunk;
+          setStreamText((prev) => prev + chunk);
+        },
+        onDone: (data) => {
+          finalResult = {
+            title: data.title || typeConfig?.label || 'Artifact',
+            content: data.full_text || accumulated,
+          };
+          setResult(finalResult);
+          setGenerating(null);
+        },
+      });
+
+      if (!finalResult && accumulated) {
+        setResult({
+          title: typeConfig?.label || 'Artifact',
+          content: accumulated,
+        });
+        setGenerating(null);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to generate artifact.');
+      setGenerating(null);
+    }
+  };
+
+  const handleCopy = async () => {
+    if (!result?.content) return;
+    try {
+      await navigator.clipboard.writeText(result.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleDismiss = () => {
+    setResult(null);
+    setStreamText('');
+    setError(null);
+  };
+
+  const generatingConfig = ARTIFACT_TYPES.find((t) => t.type === generating);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="space-y-1.5">
+        <SectionLabel>Focus (optional)</SectionLabel>
+        <input
+          type="text"
+          value={focus}
+          onChange={(e) => setFocus(e.target.value)}
+          placeholder="e.g. key risks, timeline from 2020..."
+          className={inputCls}
+          disabled={Boolean(generating)}
+        />
+        {selectedSources.length === 0 ? (
+          <p className="font-mono text-2xs text-caution text-center mt-1">
+            Select at least one source first
+          </p>
+        ) : (
+          <p className="font-mono text-2xs text-text-muted text-center mt-1">
+            from {selectedSources.length} selected source{selectedSources.length !== 1 ? 's' : ''}
+          </p>
+        )}
+      </div>
+
+      {(generating || result) && (
+        <div className="bg-panel border border-border rounded-xl p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              {generating && <Loader2 className="w-3.5 h-3.5 text-accent animate-spin flex-shrink-0" />}
+              <h4 className="font-serif text-base font-medium text-text truncate">
+                {generating ? `Generating ${generatingConfig?.label || 'artifact'}…` : result?.title}
+              </h4>
+            </div>
+            {result && (
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <IconButton
+                  icon={copied ? Check : Copy}
+                  size="sm"
+                  onClick={handleCopy}
+                  title={copied ? 'Copied' : 'Copy markdown'}
+                />
+                <IconButton
+                  icon={Download}
+                  size="sm"
+                  onClick={() => downloadMarkdown(result.title, result.content)}
+                  title="Download .md"
+                />
+                <IconButton
+                  icon={X}
+                  size="sm"
+                  onClick={handleDismiss}
+                  title="Dismiss"
+                />
+              </div>
+            )}
+          </div>
+          <div className="bg-surface rounded-xl p-3.5 text-xs text-text border border-border/60 prose prose-invert max-w-none leading-relaxed select-text max-h-96 overflow-y-auto">
+            <ReactMarkdown>{result?.content || streamText}</ReactMarkdown>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-start gap-2 bg-caution-soft border border-caution/25 rounded-xl px-4 py-3 text-sm text-caution">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+          <span className="flex-1">{error}</span>
+          <button onClick={() => setError(null)} title="Dismiss" className="flex-shrink-0 hover:text-text">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-2">
+        {ARTIFACT_TYPES.map((item) => (
+          <div
+            key={item.type}
+            className="bg-panel border border-border rounded-xl p-3.5 flex flex-col justify-between gap-2.5 hover:border-border-bright transition-colors"
+          >
+            <div className="flex items-start gap-2.5">
+              <div className="p-2 rounded-lg bg-surface-2 border border-border/60 text-accent flex-shrink-0 mt-0.5">
+                <item.icon className="w-4 h-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h4 className="text-sm font-medium text-text">{item.label}</h4>
+                <p className="text-xs text-text-dim mt-0.5 leading-relaxed">{item.desc}</p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={selectedSources.length === 0 || Boolean(generating)}
+              busy={generating === item.type}
+              onClick={() => handleGenerate(item.type)}
+              className="w-full"
+            >
+              {generating === item.type ? 'Generating…' : `Generate ${item.label}`}
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function StudioPanel({
   notes,
   onAddNote,
@@ -500,6 +727,7 @@ export default function StudioPanel({
           options={[
             { value: 'chat', label: 'Chat' },
             { value: 'notes', label: 'Notes' },
+            { value: 'artifacts', label: 'Artifacts' },
             { value: 'audio', label: 'Audio' },
             { value: 'engine', label: 'Engine' },
           ]}
@@ -508,6 +736,7 @@ export default function StudioPanel({
       <div className="flex-1 overflow-y-auto px-4 pb-4 pt-2">
         {tab === 'chat' && <ChatTab questions={questions} />}
         {tab === 'notes' && <NotesTab notes={notes} onAdd={onAddNote} onDelete={onDeleteNote} />}
+        {tab === 'artifacts' && <ArtifactsTab selectedSources={selectedSources} />}
         {tab === 'audio' && <AudioTab selectedSources={selectedSources} />}
         {tab === 'engine' && <EngineTab />}
       </div>
