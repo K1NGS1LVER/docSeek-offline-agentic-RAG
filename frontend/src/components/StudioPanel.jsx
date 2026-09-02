@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   Plus,
@@ -16,6 +16,7 @@ import {
   Copy,
   Check,
   StickyNote,
+  ArrowLeft,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useSystem } from '../lib/SystemContext';
@@ -529,48 +530,83 @@ const ARTIFACT_TYPES = [
   },
 ];
 
-const ARTIFACT_KEY_PREFIX = 'ds_artifact_';
-const artifactKey = (id) => `${ARTIFACT_KEY_PREFIX}${id || 'default'}`;
+const ARTIFACTS_KEY_PREFIX = 'ds_artifacts_';
+const artifactsKey = (id) => `${ARTIFACTS_KEY_PREFIX}${id || 'default'}`;
+const LEGACY_ARTIFACT_KEY_PREFIX = 'ds_artifact_';
+const legacyArtifactKey = (id) => `${LEGACY_ARTIFACT_KEY_PREFIX}${id || 'default'}`;
 
-function loadSavedArtifact(key) {
+function loadSavedArtifacts(key, legacyKey) {
   try {
     const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+    // Backward compatibility: check if single artifact was saved previously
+    const legacyRaw = localStorage.getItem(legacyKey);
+    if (legacyRaw) {
+      const legacy = JSON.parse(legacyRaw);
+      if (legacy && legacy.content) {
+        const item = {
+          id: `art_${Date.now()}`,
+          type: legacy.type || 'briefing',
+          title: legacy.title || 'Generated Artifact',
+          content: legacy.content,
+          focus: legacy.focus || '',
+          createdAt: Date.now(),
+        };
+        localStorage.setItem(key, JSON.stringify([item]));
+        return [item];
+      }
+    }
+    return [];
   } catch {
-    return null;
+    return [];
   }
 }
 
 function ArtifactsTab({ selectedSources = [], onAddNote }) {
   const { notebookId } = useParams();
-  const storageKey = artifactKey(notebookId);
+  const storageKey = artifactsKey(notebookId);
+  const legacyStorageKey = legacyArtifactKey(notebookId);
+
+  const [artifacts, setArtifacts] = useState(() =>
+    loadSavedArtifacts(storageKey, legacyStorageKey)
+  );
+  const [activeArtifactId, setActiveArtifactId] = useState(null);
   const [focus, setFocus] = useState('');
+  const [refinePrompt, setRefinePrompt] = useState('');
   const [generating, setGenerating] = useState(null);
   const [streamText, setStreamText] = useState('');
-  const [result, setResult] = useState(() => loadSavedArtifact(storageKey));
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
   const [savedToNotes, setSavedToNotes] = useState(false);
 
-  // Sync result to localStorage so state persists across tab switches, sidebar collapse, or reloads
+  // Sync artifacts array to localStorage so documents persist across tab switches, collapse, or reload
   useEffect(() => {
-    if (result) {
-      localStorage.setItem(storageKey, JSON.stringify(result));
-    } else {
-      localStorage.removeItem(storageKey);
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(artifacts));
+    } catch {
+      // ignore
     }
-  }, [result, storageKey]);
+  }, [artifacts, storageKey]);
 
-  const handleGenerate = async (type) => {
+  const activeArtifact = artifacts.find((a) => a.id === activeArtifactId) || null;
+
+  const handleGenerate = useCallback(async (type) => {
     if (selectedSources.length === 0) return;
     setError(null);
     setGenerating(type);
     setStreamText('');
-    setResult(null);
 
     const typeConfig = ARTIFACT_TYPES.find((t) => t.type === type);
+    const timestamp = new Date().getTime();
+    const newId = `art_${timestamp}`;
     let finalResult = null;
     let accumulated = '';
+
+    // Switch view to full sidebar reader immediately so user sees the live stream
+    setActiveArtifactId(newId);
 
     try {
       await generateArtifact(notebookId, type, focus.trim(), {
@@ -580,31 +616,103 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
         },
         onDone: (data) => {
           finalResult = {
+            id: newId,
+            type,
             title: data.title || typeConfig?.label || 'Artifact',
             content: data.full_text || accumulated,
+            focus: focus.trim(),
+            createdAt: timestamp,
           };
-          setResult(finalResult);
+          setArtifacts((prev) => [finalResult, ...prev]);
           setGenerating(null);
+          setStreamText('');
         },
       });
 
       if (!finalResult && accumulated) {
-        setResult({
+        const item = {
+          id: newId,
+          type,
           title: typeConfig?.label || 'Artifact',
           content: accumulated,
-        });
+          focus: focus.trim(),
+          createdAt: timestamp,
+        };
+        setArtifacts((prev) => [item, ...prev]);
         setGenerating(null);
+        setStreamText('');
       }
     } catch (err) {
       setError(err.message || 'Failed to generate artifact.');
       setGenerating(null);
+      setActiveArtifactId(null);
     }
-  };
+  }, [focus, notebookId, selectedSources.length]);
 
-  const handleCopy = async () => {
-    if (!result?.content) return;
+  const handleRefine = useCallback(async () => {
+    if (!activeArtifact || !refinePrompt.trim() || selectedSources.length === 0) return;
+    setError(null);
+    setGenerating('refine');
+    setStreamText('');
+
+    let accumulated = '';
+    let finalContent = '';
+    const userPrompt = refinePrompt.trim();
+    const combinedFocus = `Refine and update this ${activeArtifact.title}. Instructions: ${userPrompt}`;
+    const updateTime = new Date().getTime();
+
     try {
-      await navigator.clipboard.writeText(result.content);
+      await generateArtifact(notebookId, activeArtifact.type || 'briefing', combinedFocus, {
+        onData: (chunk) => {
+          accumulated += chunk;
+          setStreamText((prev) => prev + chunk);
+        },
+        onDone: (data) => {
+          finalContent = data.full_text || accumulated;
+          setArtifacts((prev) =>
+            prev.map((art) =>
+              art.id === activeArtifact.id
+                ? {
+                    ...art,
+                    content: finalContent,
+                    title: data.title || art.title,
+                    updatedAt: updateTime,
+                  }
+                : art
+            )
+          );
+          setGenerating(null);
+          setStreamText('');
+          setRefinePrompt('');
+        },
+      });
+
+      if (!finalContent && accumulated) {
+        setArtifacts((prev) =>
+          prev.map((art) =>
+            art.id === activeArtifact.id
+              ? {
+                  ...art,
+                  content: accumulated,
+                  updatedAt: updateTime,
+                }
+              : art
+          )
+        );
+        setGenerating(null);
+        setStreamText('');
+        setRefinePrompt('');
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to refine artifact.');
+      setGenerating(null);
+    }
+  }, [activeArtifact, notebookId, refinePrompt, selectedSources.length]);
+
+  const handleCopy = async (content) => {
+    if (!content) return;
+    try {
+      await navigator.clipboard.writeText(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -612,91 +720,179 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
     }
   };
 
-  const handleSaveToNotes = () => {
-    if (!result?.content) return;
+  const handleSaveToNotes = (artifact) => {
+    if (!artifact?.content) return;
     onAddNote?.({
-      title: result.title || 'Generated Artifact',
-      body: result.content,
+      title: artifact.title || 'Generated Artifact',
+      body: artifact.content,
     });
     setSavedToNotes(true);
     setTimeout(() => setSavedToNotes(false), 2000);
   };
 
-  const handleDismiss = () => {
-    setResult(null);
-    setStreamText('');
-    setError(null);
-    localStorage.removeItem(storageKey);
+  const handleDelete = (id, e) => {
+    e?.stopPropagation?.();
+    setArtifacts((prev) => prev.filter((a) => a.id !== id));
+    if (activeArtifactId === id) {
+      setActiveArtifactId(null);
+      setStreamText('');
+      setGenerating(null);
+    }
   };
 
-  const generatingConfig = ARTIFACT_TYPES.find((t) => t.type === generating);
+  // If in full-sidebar reader view (viewing or generating a specific document)
+  if (activeArtifactId !== null) {
+    const displayTitle = activeArtifact?.title || (generating && ARTIFACT_TYPES.find((t) => t.type === generating)?.label) || 'Document';
+    const displayContent = streamText || activeArtifact?.content || '';
+    const activeConfig = ARTIFACT_TYPES.find((t) => t.type === activeArtifact?.type);
+    const IconComponent = activeConfig?.icon || FileText;
 
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="space-y-1.5">
-        <SectionLabel>Focus (optional)</SectionLabel>
-        <input
-          type="text"
-          value={focus}
-          onChange={(e) => setFocus(e.target.value)}
-          placeholder="e.g. key risks, timeline from 2020..."
-          className={inputCls}
-          disabled={Boolean(generating)}
-        />
-        {selectedSources.length === 0 ? (
-          <p className="font-mono text-2xs text-caution text-center mt-1">
-            Select at least one source first
-          </p>
-        ) : (
-          <p className="font-mono text-2xs text-text-muted text-center mt-1">
-            from {selectedSources.length} selected source{selectedSources.length !== 1 ? 's' : ''}
-          </p>
-        )}
-      </div>
-
-      {(generating || result) && (
-        <div className="bg-panel border border-border rounded-xl p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              {generating && <Loader2 className="w-3.5 h-3.5 text-accent animate-spin flex-shrink-0" />}
-              <h4 className="font-serif text-base font-medium text-text truncate">
-                {generating ? `Generating ${generatingConfig?.label || 'artifact'}…` : result?.title}
-              </h4>
+    return (
+      <div className="flex flex-col h-full gap-3 select-text">
+        {/* Header with Back, Title, and Actions */}
+        <div className="flex items-center justify-between gap-2 pb-2 border-b border-border/80 flex-shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <IconButton
+              icon={ArrowLeft}
+              size="sm"
+              onClick={() => {
+                setActiveArtifactId(null);
+                setStreamText('');
+                setError(null);
+              }}
+              title="Back to artifacts"
+            />
+            <div className="p-1.5 rounded-md bg-surface-2 border border-border/60 text-accent flex-shrink-0">
+              <IconComponent className="w-3.5 h-3.5" />
             </div>
-            {result && (
-              <div className="flex items-center gap-1 flex-shrink-0">
+            <div className="min-w-0">
+              <h3 className="font-serif text-sm font-medium text-text truncate leading-tight">
+                {displayTitle}
+              </h3>
+              {activeArtifact?.createdAt && (
+                <p className="font-mono text-3xs text-text-dim mt-0.5">
+                  {new Date(activeArtifact.updatedAt || activeArtifact.createdAt).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                  {activeArtifact.updatedAt ? ' (customized)' : ''}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {activeArtifact && (
+              <>
                 <IconButton
                   icon={savedToNotes ? Check : StickyNote}
                   size="sm"
-                  onClick={handleSaveToNotes}
+                  onClick={() => handleSaveToNotes(activeArtifact)}
                   title={savedToNotes ? 'Saved to notes!' : 'Save to notes'}
                 />
                 <IconButton
                   icon={copied ? Check : Copy}
                   size="sm"
-                  onClick={handleCopy}
+                  onClick={() => handleCopy(displayContent)}
                   title={copied ? 'Copied' : 'Copy markdown'}
                 />
                 <IconButton
                   icon={Download}
                   size="sm"
-                  onClick={() => downloadMarkdown(result.title, result.content)}
+                  onClick={() => downloadMarkdown(displayTitle, displayContent)}
                   title="Download .md"
                 />
                 <IconButton
-                  icon={X}
+                  icon={Trash2}
                   size="sm"
-                  onClick={handleDismiss}
-                  title="Dismiss"
+                  onClick={(e) => handleDelete(activeArtifact.id, e)}
+                  title="Delete artifact"
                 />
-              </div>
+              </>
             )}
           </div>
-          <div className="bg-surface rounded-xl p-3.5 text-xs text-text border border-border/60 prose prose-invert max-w-none leading-relaxed select-text max-h-96 overflow-y-auto">
-            <ReactMarkdown>{result?.content || streamText}</ReactMarkdown>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-caution-soft border border-caution/25 rounded-xl px-3 py-2 text-xs text-caution flex-shrink-0">
+            <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span className="flex-1">{error}</span>
+            <button onClick={() => setError(null)} title="Dismiss" className="flex-shrink-0 hover:text-text">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Full-Height Scrollable Markdown Content */}
+        <div className="flex-1 overflow-y-auto bg-panel border border-border/70 rounded-xl p-4 text-xs text-text leading-relaxed prose prose-invert max-w-none">
+          {generating && !displayContent && (
+            <div className="flex items-center justify-center h-32 gap-2 text-text-muted">
+              <Loader2 className="w-4 h-4 text-accent animate-spin" />
+              <span className="text-xs">Generating document from sources…</span>
+            </div>
+          )}
+          {displayContent ? (
+            <ReactMarkdown>{displayContent}</ReactMarkdown>
+          ) : null}
+        </div>
+
+        {/* Bottom Customization / Refine Bar */}
+        <div className="pt-2 border-t border-border/80 flex-shrink-0 space-y-2">
+          <SectionLabel>Customize this document</SectionLabel>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={refinePrompt}
+              onChange={(e) => setRefinePrompt(e.target.value)}
+              placeholder="e.g. Make it shorter, add key takeaways, simplify..."
+              className={`${inputCls} flex-1 text-xs`}
+              disabled={Boolean(generating)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleRefine();
+                }
+              }}
+            />
+            <Button
+              size="sm"
+              variant="accent"
+              disabled={!refinePrompt.trim() || Boolean(generating) || selectedSources.length === 0}
+              busy={generating === 'refine'}
+              onClick={handleRefine}
+            >
+              Refine
+            </Button>
           </div>
         </div>
-      )}
+      </div>
+    );
+  }
+
+  // Main List & Generator View (activeArtifactId === null)
+  return (
+    <div className="flex flex-col gap-5 select-text pb-4">
+      {/* Top Generator Section */}
+      <div className="space-y-2.5">
+        <SectionLabel>Focus / Instructions (optional)</SectionLabel>
+        <input
+          type="text"
+          value={focus}
+          onChange={(e) => setFocus(e.target.value)}
+          placeholder="e.g. key risks, timeline from 2020, technical vocabulary..."
+          className={inputCls}
+          disabled={Boolean(generating)}
+        />
+        {selectedSources.length === 0 ? (
+          <p className="font-mono text-2xs text-caution text-center">
+            Select at least one source first
+          </p>
+        ) : (
+          <p className="font-mono text-2xs text-text-muted text-center">
+            from {selectedSources.length} selected source{selectedSources.length !== 1 ? 's' : ''}
+          </p>
+        )}
+      </div>
 
       {error && (
         <div className="flex items-start gap-2 bg-caution-soft border border-caution/25 rounded-xl px-4 py-3 text-sm text-caution">
@@ -708,6 +904,7 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
         </div>
       )}
 
+      {/* Generator Cards */}
       <div className="grid grid-cols-1 gap-2">
         {ARTIFACT_TYPES.map((item) => (
           <div
@@ -735,6 +932,64 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
             </Button>
           </div>
         ))}
+      </div>
+
+      {/* Created Documents Section (closed compact cards) */}
+      <div className="space-y-2 pt-2 border-t border-border/80">
+        <div className="flex items-center justify-between">
+          <SectionLabel>Created Documents ({artifacts.length})</SectionLabel>
+        </div>
+
+        {artifacts.length === 0 ? (
+          <div className="p-4 rounded-xl border border-dashed border-border/80 text-center">
+            <p className="text-xs text-text-dim">
+              No documents created yet. Choose a format above to generate one.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {artifacts.map((art) => {
+              const config = ARTIFACT_TYPES.find((t) => t.type === art.type);
+              const IconComp = config?.icon || FileText;
+              return (
+                <div
+                  key={art.id}
+                  onClick={() => setActiveArtifactId(art.id)}
+                  className="group bg-panel border border-border rounded-xl p-3 flex items-center justify-between gap-2 cursor-pointer hover:border-border-bright hover:-translate-y-px transition-all duration-150"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    <div className="p-1.5 rounded-lg bg-surface-2 border border-border/60 text-accent flex-shrink-0">
+                      <IconComp className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h4 className="text-xs font-medium text-text truncate group-hover:text-accent transition-colors">
+                        {art.title}
+                      </h4>
+                      <p className="font-mono text-3xs text-text-muted mt-0.5">
+                        {new Date(art.createdAt).toLocaleDateString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                        })}{' '}
+                        ·{' '}
+                        {new Date(art.createdAt).toLocaleTimeString([], {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                        {art.updatedAt ? ' · customized' : ''}
+                      </p>
+                    </div>
+                  </div>
+                  <IconButton
+                    icon={Trash2}
+                    size="sm"
+                    onClick={(e) => handleDelete(art.id, e)}
+                    title="Delete document"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
