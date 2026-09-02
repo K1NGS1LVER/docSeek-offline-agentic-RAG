@@ -10,8 +10,17 @@ def test_is_available_success():
         assert web_research.is_available() is True
 
 
-def test_is_available_failure():
+def test_is_available_fallback_when_searxng_down():
     with patch("requests.get", side_effect=Exception("Connection refused")):
+        web_research._health_cache = {"available": None, "checked_at": 0.0}
+        # Falls back to ddgs successfully
+        assert web_research.is_available() is True
+        assert web_research._health_cache.get("engine") == "duckduckgo"
+
+
+def test_is_available_total_failure():
+    with patch("requests.get", side_effect=Exception("Connection refused")), \
+         patch.dict("sys.modules", {"ddgs": None, "duckduckgo_search": None}):
         web_research._health_cache = {"available": None, "checked_at": 0.0}
         assert web_research.is_available() is False
 
@@ -41,6 +50,7 @@ def test_search_web_parsing():
     }
     with patch("requests.get") as mock_get:
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.json.return_value = sample_response
         mock_resp.raise_for_status.return_value = None
         mock_get.return_value = mock_resp
