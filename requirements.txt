@@ -24,6 +24,7 @@ faster-whisper
 soundfile
 tree-sitter>=0.21.0
 trafilatura
+redis>=5.0.0
 
 # --- Podcast text-to-speech (Kokoro) ---------------------------------------
 # Kokoro 0.7.16 hard-pins numpy==1.26.4 and its misaki[en] extra pulls

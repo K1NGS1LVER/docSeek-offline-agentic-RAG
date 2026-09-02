@@ -6,8 +6,15 @@ from typing import List, Optional, Dict, Any
 
 @contextmanager
 def get_db(db_path: str):
-    """Context manager for database connections"""
-    conn = sqlite3.connect(db_path)
+    """Context manager for database connections with high-performance concurrency PRAGMAs."""
+    conn = sqlite3.connect(db_path, timeout=10.0)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode = WAL;")
+    cursor.execute("PRAGMA synchronous = NORMAL;")
+    cursor.execute("PRAGMA cache_size = -64000;")
+    cursor.execute("PRAGMA mmap_size = 268435456;")
+    cursor.execute("PRAGMA busy_timeout = 10000;")
+    cursor.close()
     try:
         yield conn
     finally:

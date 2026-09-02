@@ -36,6 +36,7 @@ from app.core.config import (
     LLM_LIGHT_MODEL,
 )
 from app.core import database, parsing, chunking, reranker, stt, tts, podcast, research, web_research
+from app.core.cache import cache
 from app.core.engine import VectorEngine, clear_model_memory
 from app.core.llm import OllamaLLM
 from app.core.fusion import reciprocal_rank_fusion
@@ -910,6 +911,10 @@ async def ask(request: AskRequest):
 
 @app.get("/suggestions")
 async def get_suggestions(notebook_id: str = Query(...)):
+    cached_suggestions = cache.get_json(f"suggestions:{notebook_id}")
+    if cached_suggestions is not None:
+        return {"suggestions": cached_suggestions}
+
     rt = get_runtime(notebook_id)
     if rt.engine.get_total_vectors() == 0:
         return {"suggestions": []}
@@ -959,7 +964,10 @@ async def get_suggestions(notebook_id: str = Query(...)):
         questions = (result or {}).get("questions", [])
         if not isinstance(questions, list):
             questions = []
-        return {"suggestions": questions[:4]}
+        top_questions = questions[:4]
+        if top_questions:
+            cache.set_json(f"suggestions:{notebook_id}", top_questions, ttl=600)
+        return {"suggestions": top_questions}
     except Exception as e:
         logger.warning(f"Failed to generate suggestions: {e}")
         return {"suggestions": []}
@@ -1917,11 +1925,14 @@ def get_system_memory():
 
 @app.post("/system/memory/clear")
 def clear_system_memory():
-    """Manual memory reclamation: purge PyTorch caching allocator and unload idle models."""
+    """Manual memory reclamation: purge PyTorch caching allocator, unload idle models, and clear caches."""
     stt.unload()
     tts.unload()
     clear_model_memory()
-    return {"status": "ok", "message": "Memory cache cleared and audio models unloaded."}
+    cache_res = cache.clear()
+    valkey_cleared = cache_res.get("valkey_cleared", 0)
+    msg = f"Memory cache cleared ({valkey_cleared} Valkey keys purged) and audio models unloaded."
+    return {"status": "ok", "message": msg}
 
 
 @app.post("/rebuild")

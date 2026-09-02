@@ -41,12 +41,12 @@ if ! curl -s http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
     echo "    ${CLR_DIM}Make sure to run 'ollama serve' for local LLM answers, suggestions, and artifacts.${CLR_RESET}"
 fi
 
-# Start SearXNG for web research if Docker daemon is available
+# Start SearXNG & Valkey if Docker daemon is available
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    log_info "Starting SearXNG search engine (Docker)..."
+    log_info "Starting SearXNG search & Valkey cache (Docker)..."
     docker compose up -d 2>&1 | sed "s|^|${TAG_SEARXNG}|"
 else
-    echo "${CLR_DIM}==> Docker not running. Using built-in DuckDuckGo search fallback.${CLR_RESET}"
+    echo "${CLR_DIM}==> Docker not running. Using built-in DuckDuckGo search and in-memory LRU cache.${CLR_RESET}"
 fi
 
 trap 'kill 0' EXIT INT TERM

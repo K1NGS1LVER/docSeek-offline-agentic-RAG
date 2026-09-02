@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from sentence_transformers import SentenceTransformer
 from .config import MODEL_NAME, EMBEDDING_DIM, MAX_EMBED_BATCH_SIZE
+from .cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,11 @@ class VectorEngine:
         self._lock = threading.RLock()
 
     def embed(self, text: str) -> np.ndarray:
-        """Generate normalized embedding for text under torch.inference_mode."""
+        """Generate normalized embedding for text under torch.inference_mode with caching."""
+        cached = cache.get_embedding(text, MODEL_NAME, self.dimension)
+        if cached is not None:
+            return cached
+
         try:
             # ponytail: add search_document: prefix if using Nomic v1.5 models for optimal vector retrieval accuracy
             prepended = f"search_document: {text}" if "nomic" in MODEL_NAME.lower() else text
@@ -80,34 +85,52 @@ class VectorEngine:
                 embedding = self.model.encode(prepended, convert_to_numpy=True)
             embedding = embedding.reshape(1, -1).astype("float32")
             faiss.normalize_L2(embedding)
+            cache.set_embedding(text, MODEL_NAME, embedding)
             return embedding
         except Exception as e:
             logger.error(f"Embedding failed for text ({len(text)} chars): {e}")
             raise
 
     def embed_batch(self, texts: list) -> np.ndarray:
-        """Generate normalized embeddings for multiple texts under torch.inference_mode.
-        Processes in bounded sub-batches to prevent runaway PyTorch tensor memory allocations."""
+        """Generate normalized embeddings for multiple texts under torch.inference_mode with batch caching."""
         if not texts:
             return np.array([])
 
+        hits, miss_indices = cache.get_embeddings_batch(texts, MODEL_NAME, self.dimension)
+        if not miss_indices:
+            # All items were cached!
+            return np.vstack([hits[i] for i in range(len(texts))])
+
         try:
+            missing_texts = [texts[i] for i in miss_indices]
             # ponytail: add search_document: prefix batch-wide for Nomic v1.5 embedding models
-            prepended = [f"search_document: {t}" if "nomic" in MODEL_NAME.lower() else t for t in texts]
+            prepended = [f"search_document: {t}" if "nomic" in MODEL_NAME.lower() else t for t in missing_texts]
+
             with torch.inference_mode(), _model_lock:
                 if len(prepended) <= MAX_EMBED_BATCH_SIZE:
-                    embeddings = self.model.encode(prepended, convert_to_numpy=True, show_progress_bar=False)
-                    embeddings = embeddings.astype("float32")
+                    computed = self.model.encode(prepended, convert_to_numpy=True, show_progress_bar=False)
+                    computed = computed.astype("float32")
                 else:
                     batches = []
                     for i in range(0, len(prepended), MAX_EMBED_BATCH_SIZE):
                         batch = prepended[i:i + MAX_EMBED_BATCH_SIZE]
                         b_emb = self.model.encode(batch, convert_to_numpy=True, show_progress_bar=False)
                         batches.append(b_emb.astype("float32"))
-                    embeddings = np.vstack(batches)
+                    computed = np.vstack(batches)
 
-            faiss.normalize_L2(embeddings)
-            return embeddings
+            faiss.normalize_L2(computed)
+
+            # Store new embeddings in cache
+            new_cache_items = []
+            for idx_in_missing, original_idx in enumerate(miss_indices):
+                vec = computed[idx_in_missing].reshape(1, -1)
+                hits[original_idx] = vec
+                new_cache_items.append((texts[original_idx], vec))
+
+            cache.set_embeddings_batch(new_cache_items, MODEL_NAME)
+
+            # Assemble full result in original order
+            return np.vstack([hits[i] for i in range(len(texts))])
         except Exception as e:
             logger.error(f"Batch embedding failed for {len(texts)} texts: {e}")
             raise

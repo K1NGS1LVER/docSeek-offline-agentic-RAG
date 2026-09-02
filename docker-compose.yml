@@ -10,3 +10,16 @@ services:
     environment:
       - SEARXNG_BASE_URL=http://localhost:8080
     restart: unless-stopped
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    container_name: docseek-valkey
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkey-data:/data
+    restart: unless-stopped
+
+volumes:
+  valkey-data:
+
