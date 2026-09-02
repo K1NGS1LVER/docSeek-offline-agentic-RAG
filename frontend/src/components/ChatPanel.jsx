@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download, Copy, Check, Trash2 } from 'lucide-react';
+import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download, Copy, Check, Trash2, Sparkles, Compass } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { search, ask, research, getSuggestions, streamSpeech, synthesizeSpeech, getDocumentViewUrl, createDictationSocket } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
@@ -517,6 +517,95 @@ function ResultCard({ result, index }) {
   );
 }
 
+const MODES = [
+  { value: 'ask', label: 'Ask', icon: Sparkles, desc: 'Grounded Q&A' },
+  { value: 'search', label: 'Search', icon: FileText, desc: 'Chunk retrieval' },
+  { value: 'research', label: 'Research', icon: Compass, desc: 'Deep research' },
+];
+
+function ModeDropdown({ mode, setMode, disabled }) {
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
+
+  const activeMode = MODES.find((m) => m.value === mode) || MODES[0];
+  const Icon = activeMode.icon;
+
+  return (
+    <div ref={dropdownRef} className="relative flex-shrink-0">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((prev) => !prev)}
+        className="h-8 px-2.5 bg-accent-soft border border-accent/40 hover:border-accent hover:bg-accent/15 text-accent rounded-lg text-xs font-medium inline-flex items-center gap-1.5 transition-all focus:outline-none disabled:opacity-50 disabled:pointer-events-none"
+        title="Select search or generation mode"
+      >
+        <Icon className="w-3.5 h-3.5" />
+        <span>{activeMode.label}</span>
+        <ChevronDown
+          className={`w-3 h-3 transition-transform duration-200 ${
+            open ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+
+      {open && (
+        <div className="absolute bottom-full mb-2 left-0 w-48 bg-surface border border-border-bright rounded-xl shadow-2xl p-1.5 z-50">
+          <div className="space-y-1">
+            {MODES.map((m) => {
+              const ItemIcon = m.icon;
+              const isSelected = m.value === mode;
+              return (
+                <button
+                  key={m.value}
+                  type="button"
+                  onClick={() => {
+                    setMode(m.value);
+                    setOpen(false);
+                  }}
+                  className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-left text-xs transition-colors ${
+                    isSelected
+                      ? 'bg-accent-soft text-accent font-semibold border border-accent/30'
+                      : 'text-text hover:bg-surface-2'
+                  }`}
+                >
+                  <ItemIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="leading-tight">{m.label}</div>
+                    <div className="font-mono text-3xs text-text-muted leading-tight mt-0.5">
+                      {m.desc}
+                    </div>
+                  </div>
+                  {isSelected && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent flex-shrink-0" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ================================================================== */
 export default function ChatPanel({
   sourceFilter,
@@ -996,19 +1085,7 @@ export default function ChatPanel({
             disabled={isSearching || !canType}
             className="flex-1 min-w-0 bg-transparent text-base text-text placeholder:text-text-muted focus:outline-none disabled:text-disabled-fg"
           />
-          <div className="relative flex-shrink-0 flex items-center">
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value)}
-              className="h-8 pl-3 pr-7 bg-surface-2 border border-border/80 hover:border-border-bright rounded-lg text-xs font-medium text-text appearance-none cursor-pointer focus:outline-none focus:border-accent transition-colors"
-              title="Select search or generation mode"
-            >
-              <option value="ask" className="bg-surface text-text">Ask</option>
-              <option value="search" className="bg-surface text-text">Search</option>
-              <option value="research" className="bg-surface text-text">Research</option>
-            </select>
-            <ChevronDown className="w-3.5 h-3.5 text-text-muted pointer-events-none absolute right-2" />
-          </div>
+          <ModeDropdown mode={mode} setMode={setMode} disabled={isSearching || !canType} />
           <select
             value={topK}
             onChange={(e) => setTopK(e.target.value === 'auto' ? 'auto' : Number(e.target.value))}
