@@ -903,10 +903,15 @@ export default function ChatPanel({
   const canType = selectedCount > 0;
 
   return (
-    <section className="flex-1 min-w-[380px] flex flex-col">
+    <section className="flex-1 min-w-[380px] flex flex-col relative">
       {messages.length > 0 && (
-        <div className="flex-shrink-0 flex items-center justify-end px-6 pt-4">
-          <IconButton icon={Trash2} onClick={() => setClearOpen(true)} title="Clear chat" />
+        <div className="absolute top-3 right-6 z-10">
+          <IconButton
+            icon={Trash2}
+            onClick={() => setClearOpen(true)}
+            title="Clear chat"
+            className="bg-surface/80 backdrop-blur-sm border border-border/60 shadow-sm hover:bg-surface hover:text-caution"
+          />
         </div>
       )}
       <div className="flex-1 overflow-y-auto px-6 pt-8 pb-4">
@@ -1126,15 +1131,15 @@ export default function ChatPanel({
           </button>
         </form>
         {micError ? (
-          <p className="text-center font-mono text-2xs uppercase tracking-[0.1em] text-caution mt-2">
+          <p className="text-center font-mono text-[9.5px] text-caution mt-1.5">
             {micError}
           </p>
         ) : (
-          <p className="text-center font-mono text-2xs uppercase tracking-[0.1em] text-text-muted mt-2">
+          <p className="text-center font-mono text-[9.5px] text-text-muted/65 mt-1.5 select-none">
             grounded in{' '}
-            <b className="text-accent">
+            <span className="text-text-muted font-normal">
               {selectedCount} of {totalSources} source{totalSources !== 1 ? 's' : ''}
-            </b>{' '}
+            </span>{' '}
             · all local
           </p>
         )}

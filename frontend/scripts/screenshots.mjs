@@ -177,6 +177,12 @@ async function main() {
   await sleep(700);
   await page.screenshot({ path: path.join(IMAGES, 'workspace_chat.jpg'), type: 'jpeg', quality: 92 });
 
+  console.log('[shots] capturing knowledge graph…');
+  await page.goto(`${WEB}/app/${handbookId}/graph`, { waitUntil: 'networkidle' });
+  await page.locator('canvas').first().waitFor({ timeout: 30000 }).catch(() => {});
+  await sleep(1500);
+  await page.screenshot({ path: path.join(IMAGES, 'knowledge_graph.jpg'), type: 'jpeg', quality: 92 });
+
   await browser.close();
   console.log(`[shots] done → ${IMAGES}`);
 }

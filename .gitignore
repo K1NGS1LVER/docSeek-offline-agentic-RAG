@@ -11,7 +11,9 @@ env/
 
 # Data & Persistence
 data/
-docs/
+docs/*
+!docs/images/
+!docs/images/**
 *.db
 *.faiss
 *.log

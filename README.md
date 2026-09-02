@@ -20,6 +20,7 @@ Built with **FastAPI · FAISS · Sentence-Transformers · SQLite · Ollama · Re
 - [Quick Start (the easy way)](#quick-start-the-easy-way)
 - [Manual Setup (step by step)](#manual-setup-step-by-step)
 - [Using docSeek](#using-docseek)
+- [Knowledge Graph](#interactive-knowledge-graph)
 - [How it works](#how-it-works)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
@@ -32,6 +33,8 @@ Built with **FastAPI · FAISS · Sentence-Transformers · SQLite · Ollama · Re
 - 🔒 **Stay 100% local & private.** No cloud, no API keys, no telemetry. Your documents never leave the machine.
 - 📚 **Organize work into notebooks.** Each notebook is a fully isolated corpus with its own database, vector index, and files — switch between projects without their contents ever mixing.
 - 🧠 **Ask with an agent, not just search.** A local LLM plans each query, rewrites unclear questions, retrieves, reranks, grades the evidence, and re-tries when it's not good enough (Corrective RAG).
+- 🕸️ **Explore connections via Knowledge Graph.** Visualize document relationships, cross-references, tags, and semantic cosine similarity clusters in an interactive 2D force-directed canvas.
+- 🧩 **AST-Aware Code Ingestion.** Ingest whole repositories (Python, JavaScript, TypeScript, Markdown) with language-aware abstract syntax tree chunking that preserves function, class, and method boundaries.
 - 🔎 **Hybrid retrieval.** Dense vectors (FAISS) fused with keyword search (SQLite FTS5) via Reciprocal Rank Fusion, with optional local cross-encoder reranking.
 - 📄 **Ingest almost anything.** `.txt`, `.md`, `.html`, `.docx`, `.pdf` (with on-device OCR fallback for scanned PDFs), `.pptx`, pasted text, whole GitHub repos, or web pages.
 - 🎙️ **Talk and listen.** Dictate questions with your mic (local Whisper), have answers read aloud, or generate a two-host **audio overview** of your sources (local Kokoro TTS).
@@ -63,7 +66,7 @@ Built with **FastAPI · FAISS · Sentence-Transformers · SQLite · Ollama · Re
 ./setup.sh
 
 # 2. Pull the default local model
-ollama pull phi3:mini
+ollama pull qwen2.5:1.5b       # fast, reliable JSON agent (or phi3:mini)
 
 # 3. (Optional) Start SearXNG for web research
 docker compose up -d
@@ -117,7 +120,8 @@ cd frontend && npm install && cd ..
 
 ```bash
 # Install Ollama from https://ollama.com and start it, then:
-ollama pull phi3:mini          # default, fast
+ollama pull qwen2.5:1.5b       # default, fast & reliable structured agent
+ollama pull phi3:mini          # alternative lightweight 3.8B model
 ollama pull qwen2.5:7b         # optional, stronger — better research reports & podcasts
 ```
 
@@ -161,6 +165,7 @@ docker compose up -d           # starts SearXNG on http://localhost:8080
    - **Research** — a long, multi-section cited report.
 4. **Scope retrieval** by checking/unchecking sources in the left panel.
 5. **Do more in the Studio panel** (right): take notes, generate an audio overview, or inspect engine stats.
+6. **Navigate the Knowledge Graph**: Click the network graph icon in the top header to reveal semantic connections, tags, and citation relationships across your corpus.
 
 **Bulk ingest from the CLI** (each notebook is isolated, so pass its id):
 
@@ -171,6 +176,21 @@ python -m app.ingest --notebook <notebook-id> --url https://example.com/page
 
 ---
 
+## Interactive Knowledge Graph
+
+Explore your document collection not just through linear search, but as an interconnected knowledge web.
+
+![The docSeek interactive knowledge graph](docs/images/knowledge_graph.jpg)
+
+<p align="center"><em>Visualize cross-document citations, semantic similarity clusters, and tag relationships in a responsive 2D canvas.</em></p>
+
+- 🕸️ **Semantic Similarity Edges**: Nodes represent documents or individual chunks; edges map semantic cosine proximity above an adjustable threshold.
+- 🎛️ **Real-Time Physics Tuning**: Adjust force-directed repulsion, minimum similarity thresholds, and cluster tension directly from the control drawer.
+- 🔎 **Graph Filtering & Search**: Find specific nodes by keyword or tag to highlight isolated subgraphs.
+- 📑 **Integrated Document Drawer**: Click any node to inspect chunk text, entity tags, references, and neighboring source passages.
+
+---
+
 ## How it works
 
 Each notebook is physically isolated on disk (`data/notebooks/<id>/` with its own SQLite DB, FAISS index, uploads, and audio). Every request is scoped to one notebook.
@@ -178,19 +198,24 @@ Each notebook is physically isolated on disk (`data/notebooks/<id>/` with its ow
 ```mermaid
 graph TD
     subgraph Ingestion Pipeline
-        Doc[Upload / Paste / GitHub] --> Detect{File Type}
+        Doc[Upload / Paste / GitHub / Web] --> Detect{File Type}
+        Detect -->|Code py/js/ts| AST[AST Syntax Chunking]
         Detect -->|PDF/Image| OCR{Scanned?}
         OCR -->|Yes| Tesseract[Tesseract OCR]
         OCR -->|No| PyPDF[PDF Text Extraction]
         Detect -->|MD/HTML/Office| Parse[Text Extractors]
-        Tesseract & PyPDF & Parse --> Chunk{Chunking}
-        Chunk -->|recursive / semantic / auto| Embed[Embed chunks]
+        Tesseract & PyPDF & Parse & AST --> Chunk{Chunking Strategy}
+        Chunk -->|recursive / semantic / AST / auto| Embed[Embed Chunks]
         Embed --> SQLite[(SQLite + FTS5)]
         Embed --> FAISS[(FAISS Index)]
+        Embed --> GraphGen[Knowledge Graph Extractor]
+        GraphGen --> GraphData[(Graph Nodes & Edges)]
     end
 
     subgraph Query Pipeline
-        Q[User Query] --> Mode{Mode}
+        Q[User Query] --> CacheCheck{Semantic Cache?}
+        CacheCheck -->|Hit| CachedAns[Return Cached Answer]
+        CacheCheck -->|Miss| Mode{Mode}
         Mode -->|Search| Hybrid[Hybrid Search: FTS5 + FAISS]
         Mode -->|Ask| Agent[LangGraph Agent]
         Agent --> Plan[Plan query & dynamic k]
@@ -211,7 +236,7 @@ graph TD
     style LLM fill:#e0af68,stroke:#ff9e64
 ```
 
-**Models (all local):** embeddings `all-mpnet-base-v2` (768-dim) · reranking `ms-marco-MiniLM-L-6-v2` · dictation `faster-whisper` · TTS `Kokoro-82M` · reasoning via Ollama (`phi3:mini` by default).
+**Models (all local):** embeddings `nomic-ai/nomic-embed-text-v1.5` (8192-token context, 768-dim) · reranking `ms-marco-MiniLM-L-6-v2` · dictation `faster-whisper` · TTS `Kokoro-82M` · reasoning via Ollama (`qwen2.5:1.5b` default or `phi3:mini`).
 
 ---
 
@@ -222,8 +247,10 @@ Set via environment variables (or edit `app/core/config.py`):
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
 | `DOCSEEK_PORT` | `8000` | Backend port. |
-| `DOCSEEK_LLM_MODEL` | `phi3:mini` | Ollama model for the agent and generation. |
+| `DOCSEEK_LLM_MODEL` | `qwen2.5:1.5b` | Ollama model for the agent and generation. |
 | `DOCSEEK_LLM_BASE_URL` | `http://localhost:11434/v1` | Ollama endpoint. |
+| `DOCSEEK_EMBED_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | Dense vector embedding model (8192 context). |
+| `DOCSEEK_EMBED_DIM` | `768` | Embedding vector dimension. |
 | `DOCSEEK_STT_MODEL` | `small` | faster-whisper size (`tiny`/`base`/`small`/`medium`). |
 | `DOCSEEK_TTS_VOICE_A` / `_B` | `af_heart` / `am_michael` | The two podcast host voices. |
 | `DOCSEEK_SEARXNG_URL` | `http://localhost:8080` | SearXNG endpoint for local web research. |
@@ -236,7 +263,7 @@ Set via environment variables (or edit `app/core/config.py`):
 
 ## Troubleshooting
 
-- **Answers are generic / no citations.** Ollama isn't running or the model isn't pulled. Start Ollama and run `ollama pull phi3:mini`. docSeek falls back to plain hybrid search when the LLM is unreachable.
+- **Answers are generic / no citations.** Ollama isn't running or the model isn't pulled. Start Ollama and run `ollama pull qwen2.5:1.5b`. docSeek falls back to plain hybrid search when the LLM is unreachable.
 - **First query is slow.** Models load lazily on first use (embedder, reranker, Whisper, Kokoro download once). Subsequent runs are fast.
 - **Scanned PDF won't ingest.** Install `tesseract` (OCR). Without it, image-only PDFs are skipped cleanly rather than crashing.
 - **Podcast/TTS fails.** Run `./scripts/install_audio.sh` and install `espeak-ng`.
@@ -256,6 +283,10 @@ Set via environment variables (or edit `app/core/config.py`):
 │   │   ├── database.py  # SQLite schema + queries (per notebook)
 │   │   ├── engine.py    # Embeddings + FAISS index
 │   │   ├── agent.py     # LangGraph agentic retrieval loop
+│   │   ├── ast_chunking.py # AST parser for Python/JS/TS code
+│   │   ├── graph.py     # Knowledge graph extraction & similarity edges
+│   │   ├── cache.py     # Semantic response & retrieval cache
+│   │   ├── web_research.py # SearXNG web decomposition & ingestion
 │   │   ├── podcast.py   # Audio overview graph
 │   │   └── research.py  # Deep-research graph
 │   ├── server.py        # FastAPI endpoints + SSE
@@ -268,7 +299,12 @@ Set via environment variables (or edit `app/core/config.py`):
 │       ├── uploads/         #   raw files
 │       └── audio/           #   generated audio
 ├── frontend/            # React + Vite UI
-├── scripts/             # install_audio.sh, screenshots, debug tools
+│   ├── src/
+│   │   ├── components/  # ChatPanel, GraphCanvas, SourcesPanel, StudioPanel...
+│   │   ├── pages/       # Workspace, GraphPage, NotebooksPage, LandingPage
+│   │   └── lib/         # API clients and SystemContext
+│   └── scripts/         # Automated Playwright screenshot harness
+├── scripts/             # install_audio.sh, debug tools
 ├── setup.sh             # One-command setup
 ├── run.sh               # Run backend + frontend
 └── requirements.txt     # Backend dependencies
