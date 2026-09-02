@@ -111,68 +111,87 @@ function PendingRow({ item, onRetry, onDismiss }) {
 
 function WebResearchSection() {
   const { notebookId } = useParams();
-  const { researchAvailable, refreshSources, refreshStats, addLog } = useSystem();
-  const [expanded, setExpanded] = useState(false);
-  const [query, setQuery] = useState('');
-  const [mode, setMode] = useState('quick');
-  const [results, setResults] = useState([]);
-  const [selected, setSelected] = useState(new Set());
-  const [isSearching, setIsSearching] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
-  const [traceLog, setTraceLog] = useState([]);
-  const [deepReport, setDeepReport] = useState(null);
-  const [deepQuery, setDeepQuery] = useState('');
-  const [error, setError] = useState(null);
+  const {
+    researchAvailable,
+    refreshSources,
+    refreshStats,
+    addLog,
+    researchState,
+    updateResearchState,
+  } = useSystem();
+
+  const {
+    query,
+    mode,
+    results,
+    selectedUrls,
+    isSearching,
+    isImporting,
+    traceLog,
+    deepReport,
+    deepQuery,
+    error,
+    expanded,
+  } = researchState;
 
   const handleSearch = async (e) => {
     e.preventDefault();
     if (!query.trim() || isSearching) return;
-    setError(null);
-    setResults([]);
-    setSelected(new Set());
-    setTraceLog([]);
-    setDeepReport(null);
-    setIsSearching(true);
+    updateResearchState({
+      error: null,
+      results: [],
+      selectedUrls: [],
+      traceLog: [],
+      deepReport: null,
+      isSearching: true,
+      expanded: true,
+    });
 
     try {
       if (mode === 'quick') {
         const { data } = await searchWeb(query.trim(), notebookId);
-        setResults(data.results || []);
+        updateResearchState({
+          results: data.results || [],
+          isSearching: false,
+        });
       } else {
-        setDeepQuery(query.trim());
+        updateResearchState({ deepQuery: query.trim() });
         await deepWebResearch(notebookId, query.trim(), {
-          onTrace: (evt) => setTraceLog((prev) => [...prev, evt]),
+          onTrace: (evt) =>
+            updateResearchState((prev) => ({ ...prev, traceLog: [...prev.traceLog, evt] })),
           onResults: (data) => {
-            setResults(data.results || []);
-            setDeepReport(data.report_markdown || null);
+            updateResearchState({
+              results: data.results || [],
+              deepReport: data.report_markdown || null,
+              isSearching: false,
+            });
           },
         });
       }
     } catch (err) {
-      setError(err.message);
+      updateResearchState({ error: err.message, isSearching: false });
       addLog(`Web research failed: ${err.message}`, 'ERROR');
-    } finally {
-      setIsSearching(false);
     }
   };
 
   const handleImport = async () => {
-    if (selected.size === 0 || isImporting) return;
-    setIsImporting(true);
+    if (selectedUrls.length === 0 || isImporting) return;
+    updateResearchState({ isImporting: true });
     try {
-      const urls = [...selected];
+      const urls = [...selectedUrls];
       const { data } = await importWebResults(notebookId, urls);
       addLog(`Imported ${data.imported} web source(s)`);
-      setSelected(new Set());
-      // Remove imported URLs from results
-      setResults((prev) => prev.filter((r) => !selected.has(r.url)));
+      updateResearchState((prev) => ({
+        ...prev,
+        selectedUrls: [],
+        results: prev.results.filter((r) => !urls.includes(r.url)),
+        isImporting: false,
+      }));
       await refreshSources();
       await refreshStats();
     } catch (err) {
-      setError(err.message);
+      updateResearchState({ error: err.message, isImporting: false });
       addLog(`Web import failed: ${err.message}`, 'ERROR');
-    } finally {
-      setIsImporting(false);
     }
   };
 
@@ -189,27 +208,32 @@ function WebResearchSection() {
   };
 
   const toggleSelect = (url) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(url)) next.delete(url);
-      else next.add(url);
-      return next;
+    updateResearchState((prev) => {
+      const exists = prev.selectedUrls.includes(url);
+      return {
+        ...prev,
+        selectedUrls: exists
+          ? prev.selectedUrls.filter((u) => u !== url)
+          : [...prev.selectedUrls, url],
+      };
     });
   };
 
   const toggleSelectAll = () => {
-    if (results.length > 0 && selected.size === results.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(results.map((r) => r.url)));
-    }
+    updateResearchState((prev) => ({
+      ...prev,
+      selectedUrls:
+        prev.selectedUrls.length === prev.results.length
+          ? []
+          : prev.results.map((r) => r.url),
+    }));
   };
 
   if (!researchAvailable) {
     return (
       <div className="px-4 py-3 border-b border-border">
         <button
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => updateResearchState({ expanded: !expanded })}
           className="flex items-center gap-2 w-full text-left text-sm text-text-muted"
         >
           {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -229,7 +253,7 @@ function WebResearchSection() {
   return (
     <div className="border-b border-border">
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => updateResearchState({ expanded: !expanded })}
         className="flex items-center gap-2 w-full text-left px-4 py-3 text-sm font-medium text-text hover:bg-surface-2 transition-colors"
       >
         {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -243,7 +267,7 @@ function WebResearchSection() {
             <input
               type="text"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => updateResearchState({ query: e.target.value })}
               placeholder="Search the web…"
               className="flex-1 min-w-0 h-8 px-3 text-sm bg-panel border border-border rounded-lg focus:outline-none focus:ring-1 focus:ring-accent text-text placeholder:text-text-dim"
             />
@@ -262,7 +286,7 @@ function WebResearchSection() {
               { value: 'deep', label: 'Deep' },
             ]}
             value={mode}
-            onChange={setMode}
+            onChange={(m) => updateResearchState({ mode: m })}
           />
 
           {/* Trace log (deep research) */}
@@ -287,14 +311,14 @@ function WebResearchSection() {
               <div className="flex items-center justify-between px-1 py-1 border-b border-border/50 text-xs text-text-muted">
                 <label className="flex items-center gap-2 cursor-pointer hover:text-text transition-colors">
                   <Checkbox
-                    checked={results.length > 0 && selected.size === results.length}
+                    checked={results.length > 0 && selectedUrls.length === results.length}
                     onChange={toggleSelectAll}
                   />
                   <span className="font-medium">Select all ({results.length})</span>
                 </label>
-                {selected.size > 0 && (
+                {selectedUrls.length > 0 && (
                   <span className="text-2xs font-mono text-accent">
-                    {selected.size} selected
+                    {selectedUrls.length} selected
                   </span>
                 )}
               </div>
@@ -306,7 +330,7 @@ function WebResearchSection() {
                     className="flex items-start gap-2.5 p-2 rounded-lg hover:bg-surface-2 cursor-pointer transition-colors border border-transparent hover:border-border/40"
                   >
                     <Checkbox
-                      checked={selected.has(r.url)}
+                      checked={selectedUrls.includes(r.url)}
                       onChange={() => toggleSelect(r.url)}
                       className="mt-0.5"
                     />
@@ -340,12 +364,12 @@ function WebResearchSection() {
               <Button
                 size="sm"
                 onClick={handleImport}
-                disabled={selected.size === 0 || isImporting}
+                disabled={selectedUrls.length === 0 || isImporting}
               >
                 {isImporting ? (
                   <><Loader2 className="w-3 h-3 animate-spin mr-1" />Importing…</>
                 ) : (
-                  `Import ${selected.size || ''} selected`
+                  `Import ${selectedUrls.length || ''} selected`
                 )}
               </Button>
               <IconButton

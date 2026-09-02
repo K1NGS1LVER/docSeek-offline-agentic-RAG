@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { AnimatePresence, motion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { SystemProvider, useSystem } from '../lib/SystemContext';
 import { listNotebooks } from '../lib/api';
 import WorkspaceHeader from '../components/WorkspaceHeader';
@@ -135,26 +135,22 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
         onToggleStudio={() => setStudioOpen((v) => !v)}
       />
       <div className="flex flex-1 overflow-hidden">
-        <AnimatePresence initial={false}>
-          {sourcesOpen && (
-            <motion.div
-              key="sources"
-              initial={{ width: 0 }}
-              animate={{ width: SOURCES_WIDTH }}
-              exit={{ width: 0 }}
-              transition={PANEL_TRANSITION}
-              className="flex overflow-hidden flex-shrink-0"
-            >
-              <SourcesPanel
-                unchecked={unchecked}
-                setUnchecked={setUnchecked}
-                onAdd={() => setAddOpen(true)}
-                dialogOpen={addOpen}
-                onOpenPdf={(filename) => setActivePdf(filename)}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <motion.div
+          key="sources"
+          initial={false}
+          animate={{ width: sourcesOpen ? SOURCES_WIDTH : 0 }}
+          transition={PANEL_TRANSITION}
+          className="flex overflow-hidden flex-shrink-0"
+          style={{ pointerEvents: sourcesOpen ? 'auto' : 'none' }}
+        >
+          <SourcesPanel
+            unchecked={unchecked}
+            setUnchecked={setUnchecked}
+            onAdd={() => setAddOpen(true)}
+            dialogOpen={addOpen}
+            onOpenPdf={(filename) => setActivePdf(filename)}
+          />
+        </motion.div>
         <ChatPanel
           sourceFilter={sourceFilter}
           selectedCount={selected.length}
@@ -162,26 +158,22 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
           onSaveNote={addNote}
           onQuestionsChange={setQuestions}
         />
-        <AnimatePresence initial={false}>
-          {studioOpen && (
-            <motion.div
-              key="studio"
-              initial={{ width: 0 }}
-              animate={{ width: STUDIO_WIDTH }}
-              exit={{ width: 0 }}
-              transition={PANEL_TRANSITION}
-              className="flex overflow-hidden flex-shrink-0"
-            >
-              <StudioPanel
-                notes={notes}
-                onAddNote={addNote}
-                onDeleteNote={deleteNote}
-                selectedSources={selected.map((s) => s.source_file)}
-                questions={questions}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <motion.div
+          key="studio"
+          initial={false}
+          animate={{ width: studioOpen ? STUDIO_WIDTH : 0 }}
+          transition={PANEL_TRANSITION}
+          className="flex overflow-hidden flex-shrink-0"
+          style={{ pointerEvents: studioOpen ? 'auto' : 'none' }}
+        >
+          <StudioPanel
+            notes={notes}
+            onAddNote={addNote}
+            onDeleteNote={deleteNote}
+            selectedSources={selected.map((s) => s.source_file)}
+            questions={questions}
+          />
+        </motion.div>
       </div>
 
       {addOpen && <AddSourcesModal onClose={() => setAddOpen(false)} />}

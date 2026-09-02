@@ -44,6 +44,25 @@ export function SystemProvider({ notebookId, children }) {
   // notebook it was started in.
   const [uploads, setUploads] = useState([]);
   const [researchAvailable, setResearchAvailable] = useState(false);
+
+  // Web Research state lifted to context so it survives sidebar closing/reopening
+  const [researchState, setResearchState] = useState({
+    query: '',
+    mode: 'quick',
+    results: [],
+    selectedUrls: [],
+    isSearching: false,
+    isImporting: false,
+    traceLog: [],
+    deepReport: null,
+    deepQuery: '',
+    error: null,
+    expanded: false,
+  });
+
+  const updateResearchState = useCallback((patch) => {
+    setResearchState((prev) => (typeof patch === 'function' ? patch(prev) : { ...prev, ...patch }));
+  }, []);
   const uploadSeq = useRef(0);
   const pumpingRef = useRef(false);
   // Always points at the currently active notebook, so an upload pool started
@@ -228,6 +247,19 @@ export function SystemProvider({ notebookId, children }) {
     setPodcastJob(null);
     setLastLatency(null);
     setError(null);
+    setResearchState({
+      query: '',
+      mode: 'quick',
+      results: [],
+      selectedUrls: [],
+      isSearching: false,
+      isImporting: false,
+      traceLog: [],
+      deepReport: null,
+      deepQuery: '',
+      error: null,
+      expanded: false,
+    });
 
     refreshStats();
     refreshSources();
@@ -335,6 +367,8 @@ export function SystemProvider({ notebookId, children }) {
     retryUpload,
     dismissUpload,
     researchAvailable,
+    researchState,
+    updateResearchState,
   };
 
   return <SystemContext.Provider value={value}>{children}</SystemContext.Provider>;
