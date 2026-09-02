@@ -1,11 +1,13 @@
 import os
+import gc
 import logging
 import threading
 from typing import Dict, List
 import faiss
 import numpy as np
+import torch
 from sentence_transformers import SentenceTransformer
-from .config import MODEL_NAME, EMBEDDING_DIM
+from .config import MODEL_NAME, EMBEDDING_DIM, MAX_EMBED_BATCH_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -70,28 +72,40 @@ class VectorEngine:
         self._lock = threading.RLock()
 
     def embed(self, text: str) -> np.ndarray:
-        """Generate normalized embedding for text"""
+        """Generate normalized embedding for text under torch.inference_mode."""
         try:
             # ponytail: add search_document: prefix if using Nomic v1.5 models for optimal vector retrieval accuracy
             prepended = f"search_document: {text}" if "nomic" in MODEL_NAME.lower() else text
-            embedding = self.model.encode(prepended, convert_to_numpy=True)
+            with torch.inference_mode():
+                embedding = self.model.encode(prepended, convert_to_numpy=True)
             embedding = embedding.reshape(1, -1).astype("float32")
             faiss.normalize_L2(embedding)
             return embedding
         except Exception as e:
             logger.error(f"Embedding failed for text ({len(text)} chars): {e}")
             raise
-    
+
     def embed_batch(self, texts: list) -> np.ndarray:
-        """Generate normalized embeddings for multiple texts at once (MUCH faster)"""
+        """Generate normalized embeddings for multiple texts under torch.inference_mode.
+        Processes in bounded sub-batches to prevent runaway PyTorch tensor memory allocations."""
         if not texts:
             return np.array([])
-        
+
         try:
             # ponytail: add search_document: prefix batch-wide for Nomic v1.5 embedding models
             prepended = [f"search_document: {t}" if "nomic" in MODEL_NAME.lower() else t for t in texts]
-            embeddings = self.model.encode(prepended, convert_to_numpy=True, show_progress_bar=False)
-            embeddings = embeddings.astype("float32")
+            with torch.inference_mode():
+                if len(prepended) <= MAX_EMBED_BATCH_SIZE:
+                    embeddings = self.model.encode(prepended, convert_to_numpy=True, show_progress_bar=False)
+                    embeddings = embeddings.astype("float32")
+                else:
+                    batches = []
+                    for i in range(0, len(prepended), MAX_EMBED_BATCH_SIZE):
+                        batch = prepended[i:i + MAX_EMBED_BATCH_SIZE]
+                        b_emb = self.model.encode(batch, convert_to_numpy=True, show_progress_bar=False)
+                        batches.append(b_emb.astype("float32"))
+                    embeddings = np.vstack(batches)
+
             faiss.normalize_L2(embeddings)
             return embeddings
         except Exception as e:
@@ -199,5 +213,17 @@ class VectorEngine:
             except Exception as e:
                 logger.warning(f"Could not reconstruct vectors from FAISS: {e}")
         return result
+
+
+def clear_model_memory():
+    """Reclaim PyTorch allocator caches and run Python garbage collection."""
+    gc.collect()
+    try:
+        if hasattr(torch, "mps") and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+        elif hasattr(torch, "cuda") and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 

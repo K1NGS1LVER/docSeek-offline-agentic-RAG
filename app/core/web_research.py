@@ -12,12 +12,13 @@ JS-heavy pages.
 
 import json
 import logging
+import gc
 import time
 from typing import AsyncGenerator, Optional
 
 import requests
 
-from app.core.config import SEARXNG_URL, CRAWL4AI_ENABLED, RESEARCH_MAX_RESULTS
+from app.core.config import SEARXNG_URL, CRAWL4AI_ENABLED, RESEARCH_MAX_RESULTS, MAX_WEB_EXTRACT_CHARS
 
 logger = logging.getLogger(__name__)
 
@@ -171,8 +172,10 @@ def extract_content(url: str) -> dict:
                     title = crawl_title
         except Exception as e:
             logger.warning("crawl4ai failed for %s: %s", url, e)
+        finally:
+            gc.collect()
 
-    content = content or ""
+    content = (content or "")[:MAX_WEB_EXTRACT_CHARS]
     return {
         "url": url,
         "title": title or url,

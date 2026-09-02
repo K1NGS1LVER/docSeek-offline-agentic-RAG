@@ -3,6 +3,7 @@ import os
 import pathlib
 import logging
 import json
+import subprocess
 import threading
 from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
@@ -31,9 +32,10 @@ from app.core.config import (
     CHUNKING_STRATEGY,
     DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS,
     SEARXNG_URL,
+    LLM_KEEP_ALIVE,
 )
 from app.core import database, parsing, chunking, reranker, stt, tts, podcast, research, web_research
-from app.core.engine import VectorEngine
+from app.core.engine import VectorEngine, clear_model_memory
 from app.core.llm import OllamaLLM
 from app.core.fusion import reciprocal_rank_fusion
 from app.core.agent import RetrievalAgent
@@ -214,6 +216,7 @@ def _persist_chunks(rt: "Runtime", chunks, embeddings, safe_name, file_path, str
         doc_ids = database.insert_documents_batch(rt.db_path, db_items)
         rt.engine.add_to_index(embeddings, doc_ids=doc_ids)
         rt.engine.save()
+        clear_model_memory()
     return doc_ids
 
 
@@ -311,7 +314,9 @@ async def _audio_idle_checker_loop():
     while True:
         try:
             await asyncio.sleep(30)
-            _check_audio_models_idle()
+            stt_unloaded, tts_unloaded = _check_audio_models_idle()
+            if stt_unloaded or tts_unloaded:
+                clear_model_memory()
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -326,11 +331,8 @@ async def lifespan(app: FastAPI):
     llm = OllamaLLM()
     await llm.warmup()
 
-    # Fire-and-forget: warm the TTS pipeline in the background so it doesn't
-    # delay server startup, but the first "Listen" click of the session
-    # doesn't pay Kokoro's cold-load cost. A TTS warmup failure is logged by
-    # tts.warmup() itself and must never affect startup.
-    asyncio.create_task(run_in_threadpool(tts.warmup))
+    # Note: Audio models (Kokoro TTS, Whisper STT) load lazily on first user action
+    # to save memory on mid/low-spec hardware.
 
     _audio_idle_checker_task = asyncio.create_task(_audio_idle_checker_loop())
 
@@ -1717,6 +1719,46 @@ def reset_system(notebook_id: str = Query(...), _: None = Depends(require_admin)
     return {"status": "System reset successfully"}
 
 
+@app.get("/system/memory")
+def get_system_memory():
+    """Get process memory footprint and model residency stats."""
+    try:
+        pid = os.getpid()
+        rss_kb = int(subprocess.check_output(["ps", "-o", "rss=", "-p", str(pid)]).strip())
+        rss_mb = round(rss_kb / 1024, 1)
+    except Exception:
+        rss_mb = 0.0
+
+    try:
+        import resource, platform
+        rusage = resource.getrusage(resource.RUSAGE_SELF)
+        scale = (1024 * 1024) if platform.system() == "Darwin" else 1024
+        peak_mb = round(rusage.ru_maxrss / scale, 1)
+    except Exception:
+        peak_mb = 0.0
+
+    stt_loaded = getattr(stt, "_model", None) is not None
+    tts_loaded = getattr(tts, "_pipeline", None) is not None
+
+    return {
+        "rss_mb": rss_mb,
+        "peak_mb": peak_mb,
+        "stt_loaded": stt_loaded,
+        "tts_loaded": tts_loaded,
+        "audio_idle_timeout_sec": DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS,
+        "llm_keep_alive": LLM_KEEP_ALIVE,
+    }
+
+
+@app.post("/system/memory/clear")
+def clear_system_memory():
+    """Manual memory reclamation: purge PyTorch caching allocator and unload idle models."""
+    stt.unload()
+    tts.unload()
+    clear_model_memory()
+    return {"status": "ok", "message": "Memory cache cleared and audio models unloaded."}
+
+
 @app.post("/rebuild")
 async def rebuild_index(notebook_id: str = Query(...), _: None = Depends(require_admin)):
     """Rebuild the FAISS index from all documents in the database"""
@@ -1829,8 +1871,7 @@ async def web_research_import(request: ImportWebResultsRequest):
             failed += 1
             details.append({"url": url, "status": "failed",
                            "reason": str(e)})
-            logger.error("Failed to import web source %s: %s", url, e)
-
+    await run_in_threadpool(clear_model_memory)
     return {"imported": imported, "failed": failed, "details": details}
 
 

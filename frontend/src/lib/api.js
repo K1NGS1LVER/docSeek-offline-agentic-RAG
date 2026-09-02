@@ -50,6 +50,14 @@ export async function getStats(notebookId) {
   return request(`/stats?notebook_id=${encodeURIComponent(notebookId)}`);
 }
 
+export async function getMemoryStats() {
+  return request('/system/memory');
+}
+
+export async function clearMemory() {
+  return request('/system/memory/clear', { method: 'POST' });
+}
+
 export async function getDocuments(notebookId) {
   return request(`/documents?notebook_id=${encodeURIComponent(notebookId)}`);
 }

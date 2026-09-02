@@ -71,8 +71,9 @@ LLM_MODEL = os.environ.get("DOCSEEK_LLM_MODEL", "qwen2.5:1.5b")
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 1024
 
-# Ollama keep_alive: how long the model stays resident. -1 = never unload.
-LLM_KEEP_ALIVE = -1
+# Ollama keep_alive: how long the model stays resident in RAM/VRAM.
+# Default 5m frees RAM on mid/low-tier hardware when inactive.
+LLM_KEEP_ALIVE = os.environ.get("DOCSEEK_LLM_KEEP_ALIVE", "5m")
 
 # CORS: explicit origins (credentials cannot be combined with "*").
 # Override with CORS_ORIGINS env var (comma-separated).
@@ -139,7 +140,7 @@ RESEARCH_MAX_SECTIONS = 6
 
 # Idle timeout in seconds before unloading audio models (STT/TTS) to release RAM/VRAM.
 DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS = float(
-    os.getenv("DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS", "300")
+    os.getenv("DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS", "60")
 )
 
 # ---------------------------------------------------------------------------
@@ -156,4 +157,10 @@ CRAWL4AI_ENABLED = os.environ.get("DOCSEEK_CRAWL4AI_ENABLED", "false").lower() =
 
 # Max results per web search query.
 RESEARCH_MAX_RESULTS = int(os.environ.get("DOCSEEK_RESEARCH_MAX_RESULTS", "10"))
+
+# Upper bound on extracted text per web page (chars) to prevent memory bloat on large pages.
+MAX_WEB_EXTRACT_CHARS = int(os.environ.get("DOCSEEK_MAX_WEB_EXTRACT_CHARS", "25000"))
+
+# Maximum batch size for sentence-transformer embeddings to prevent memory spikes.
+MAX_EMBED_BATCH_SIZE = int(os.environ.get("DOCSEEK_MAX_EMBED_BATCH_SIZE", "32"))
 

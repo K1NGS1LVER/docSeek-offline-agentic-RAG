@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { Plus, Trash2, Loader2, Mic, Download, AlertCircle, X } from 'lucide-react';
+import { Plus, Trash2, Loader2, Mic, Download, AlertCircle, X, RefreshCw } from 'lucide-react';
 import { useSystem } from '../lib/SystemContext';
-import { getPodcastAudioUrl } from '../lib/api';
+import { getPodcastAudioUrl, getMemoryStats, clearMemory } from '../lib/api';
 import { Button, SectionLabel, Segmented, inputCls, textareaCls } from './ui';
 
 function NoteCard({ note, onDelete }) {
@@ -257,12 +257,39 @@ function EngineTab() {
   const { stats, lastLatency, logs, ingestStatus } = useSystem();
   const [latencyHistory, setLatencyHistory] = useState([]);
   const [prevLatency, setPrevLatency] = useState(null);
+  const [memoryStats, setMemoryStats] = useState(null);
+  const [clearingMem, setClearingMem] = useState(false);
 
   // Track latency samples (state adjusted during render, not in an effect).
   if (lastLatency != null && lastLatency !== prevLatency) {
     setPrevLatency(lastLatency);
     setLatencyHistory((prev) => [...prev.slice(-29), lastLatency]);
   }
+
+  const fetchMemory = async () => {
+    try {
+      const { data } = await getMemoryStats();
+      setMemoryStats(data);
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    fetchMemory();
+    const interval = setInterval(fetchMemory, 8000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handlePurge = async () => {
+    setClearingMem(true);
+    try {
+      await clearMemory();
+      await fetchMemory();
+    } finally {
+      setClearingMem(false);
+    }
+  };
 
   const avg = latencyHistory.length
     ? Math.round(latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length)
@@ -299,6 +326,30 @@ function EngineTab() {
           </div>
         </div>
       )}
+
+      <div className="bg-panel border border-border rounded-xl p-4">
+        <div className="flex items-center justify-between mb-2">
+          <SectionLabel>Memory & Footprint</SectionLabel>
+          <button
+            type="button"
+            onClick={handlePurge}
+            disabled={clearingMem}
+            className="text-2xs font-mono text-text-muted hover:text-accent flex items-center gap-1 transition-colors px-1.5 py-0.5 rounded hover:bg-surface-2"
+            title="Purge PyTorch caching allocators and unload idle models"
+          >
+            <RefreshCw className={`w-3 h-3 ${clearingMem ? 'animate-spin text-accent' : ''}`} />
+            <span>Purge</span>
+          </button>
+        </div>
+        <FactRow k="process ram" v={memoryStats?.rss_mb ? `${memoryStats.rss_mb} MB` : 'checking...'} />
+        <FactRow k="peak ram" v={memoryStats?.peak_mb ? `${memoryStats.peak_mb} MB` : null} />
+        <FactRow k="ollama keep-alive" v={memoryStats?.llm_keep_alive || '5m'} />
+        <FactRow
+          k="audio models"
+          v={memoryStats?.tts_loaded || memoryStats?.stt_loaded ? 'active' : 'unloaded (idle)'}
+          accentClass={memoryStats?.tts_loaded || memoryStats?.stt_loaded ? 'text-accent' : 'text-text-dim'}
+        />
+      </div>
 
       <div className="bg-panel border border-border rounded-xl p-4">
         <SectionLabel className="mb-2">Pipeline</SectionLabel>
