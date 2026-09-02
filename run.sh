@@ -20,6 +20,17 @@ fi
 trap 'kill 0' EXIT INT TERM
 
 $PYTHON -m app.server 2>&1 | sed -u 's/^/[backend]  /' &
+
+# Wait for backend to be ready before starting frontend dev server
+echo "==> Waiting for backend to initialize..."
+for i in $(seq 1 30); do
+    if curl -s http://127.0.0.1:8000/web-research/health >/dev/null 2>&1; then
+        echo "==> Backend ready on http://localhost:8000"
+        break
+    fi
+    sleep 0.5
+done
+
 (cd frontend && npm run dev) 2>&1 | sed -u 's/^/[frontend] /' &
 
 wait
