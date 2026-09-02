@@ -186,18 +186,63 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
     [sourcesOpen, sourcesWidth, studioWidth]
   );
 
+  // Smart toggle handlers: when opening a panel while the opposite panel
+  // is extra-extended (which minimized the center chat area), reset the extended
+  // panel back to default size so the chat area retains comfortable breathing room.
+  const toggleSources = useCallback(() => {
+    setSourcesOpen((prev) => {
+      const willOpen = !prev;
+      if (willOpen && studioOpen) {
+        if (studioWidth > DEFAULT_STUDIO_WIDTH) {
+          setStudioWidth(DEFAULT_STUDIO_WIDTH);
+        }
+        if (sourcesWidth > DEFAULT_SOURCES_WIDTH) {
+          setSourcesWidth(DEFAULT_SOURCES_WIDTH);
+        }
+      }
+      return willOpen;
+    });
+  }, [studioOpen, studioWidth, sourcesWidth]);
+
+  const toggleStudio = useCallback(() => {
+    setStudioOpen((prev) => {
+      const willOpen = !prev;
+      if (willOpen && sourcesOpen) {
+        if (sourcesWidth > DEFAULT_SOURCES_WIDTH) {
+          setSourcesWidth(DEFAULT_SOURCES_WIDTH);
+        }
+        if (studioWidth > DEFAULT_STUDIO_WIDTH) {
+          setStudioWidth(DEFAULT_STUDIO_WIDTH);
+        }
+      }
+      return willOpen;
+    });
+  }, [sourcesOpen, sourcesWidth, studioWidth]);
+
+  // Safety net: when both panels are open, ensure their combined width never
+  // compresses the center chat window below MIN_CHAT_WIDTH.
+  useEffect(() => {
+    if (sourcesOpen && studioOpen) {
+      const maxTotal = window.innerWidth - MIN_CHAT_WIDTH;
+      if (sourcesWidth + studioWidth > maxTotal) {
+        if (sourcesWidth > DEFAULT_SOURCES_WIDTH) setSourcesWidth(DEFAULT_SOURCES_WIDTH);
+        if (studioWidth > DEFAULT_STUDIO_WIDTH) setStudioWidth(DEFAULT_STUDIO_WIDTH);
+      }
+    }
+  }, [sourcesOpen, studioOpen, sourcesWidth, studioWidth]);
+
   // [ / ] toggle the sidebars, ignored while typing anywhere.
   useEffect(() => {
     const handler = (e) => {
       const tag = e.target?.tagName;
       const typing = tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable;
       if (typing) return;
-      if (e.key === '[') setSourcesOpen((v) => !v);
-      else if (e.key === ']') setStudioOpen((v) => !v);
+      if (e.key === '[') toggleSources();
+      else if (e.key === ']') toggleStudio();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [toggleSources, toggleStudio]);
 
   // NotebookLM-style onboarding: an empty library opens the add-sources
   // dialog once, so the first action is obvious (state adjusted during
@@ -238,8 +283,8 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
         onOpenSettings={() => setSettingsOpen(true)}
         sourcesOpen={sourcesOpen}
         studioOpen={studioOpen}
-        onToggleSources={() => setSourcesOpen((v) => !v)}
-        onToggleStudio={() => setStudioOpen((v) => !v)}
+        onToggleSources={toggleSources}
+        onToggleStudio={toggleStudio}
       />
       <div className="flex flex-1 overflow-hidden relative">
         <motion.div
