@@ -27,9 +27,11 @@ def test_concurrent_ingestion_across_notebooks():
 
     t1.start()
     t2.start()
-    t1.join()
-    t2.join()
+    t1.join(timeout=15.0)
+    t2.join(timeout=15.0)
 
+    assert not t1.is_alive(), "Thread 1 timed out (deadlock)"
+    assert not t2.is_alive(), "Thread 2 timed out (deadlock)"
     assert len(errors) == 0
 
     rt1 = get_runtime(nb1["id"])

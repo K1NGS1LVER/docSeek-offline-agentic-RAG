@@ -76,7 +76,7 @@ class VectorEngine:
         try:
             # ponytail: add search_document: prefix if using Nomic v1.5 models for optimal vector retrieval accuracy
             prepended = f"search_document: {text}" if "nomic" in MODEL_NAME.lower() else text
-            with torch.inference_mode():
+            with torch.inference_mode(), _model_lock:
                 embedding = self.model.encode(prepended, convert_to_numpy=True)
             embedding = embedding.reshape(1, -1).astype("float32")
             faiss.normalize_L2(embedding)
@@ -94,7 +94,7 @@ class VectorEngine:
         try:
             # ponytail: add search_document: prefix batch-wide for Nomic v1.5 embedding models
             prepended = [f"search_document: {t}" if "nomic" in MODEL_NAME.lower() else t for t in texts]
-            with torch.inference_mode():
+            with torch.inference_mode(), _model_lock:
                 if len(prepended) <= MAX_EMBED_BATCH_SIZE:
                     embeddings = self.model.encode(prepended, convert_to_numpy=True, show_progress_bar=False)
                     embeddings = embeddings.astype("float32")
