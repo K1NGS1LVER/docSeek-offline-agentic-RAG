@@ -12,12 +12,32 @@ import SettingsModal from '../components/SettingsModal';
 import PdfViewerModal from '../components/PdfViewerModal';
 
 const PANELS_KEY = 'ds_panels';
-// Must match SourcesPanel.jsx's w-72 / StudioPanel.jsx's w-80 (theme.css
-// --sources-w / --studio-w) so the slide animation lands on the panel's
-// real rendered width.
-const SOURCES_WIDTH = 288;
-const STUDIO_WIDTH = 320;
+
+const DEFAULT_SOURCES_WIDTH = 360;
+const MIN_SOURCES_WIDTH = 260;
+const MAX_SOURCES_WIDTH = 650;
+
+const DEFAULT_STUDIO_WIDTH = 380;
+const MIN_STUDIO_WIDTH = 280;
+const MAX_STUDIO_WIDTH = 750;
+
 const PANEL_TRANSITION = { duration: 0.2, ease: 'easeInOut' };
+
+function ResizeHandle({ onMouseDown, side = 'right' }) {
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      role="separator"
+      aria-orientation="vertical"
+      className={`group absolute top-0 bottom-0 z-30 w-3 flex items-center justify-center cursor-col-resize select-none ${
+        side === 'right' ? '-right-1.5' : '-left-1.5'
+      }`}
+      title="Drag to resize sidebar"
+    >
+      <div className="w-1 h-full rounded-full transition-colors duration-150 group-hover:bg-accent/60 group-active:bg-accent" />
+    </div>
+  );
+}
 
 // Notes are scoped per notebook so switching notebooks never mixes their
 // saved notes together.
@@ -37,9 +57,16 @@ function loadPanelState() {
     return {
       sourcesOpen: saved?.sourcesOpen ?? true,
       studioOpen: saved?.studioOpen ?? true,
+      sourcesWidth: saved?.sourcesWidth ?? DEFAULT_SOURCES_WIDTH,
+      studioWidth: saved?.studioWidth ?? DEFAULT_STUDIO_WIDTH,
     };
   } catch {
-    return { sourcesOpen: true, studioOpen: true };
+    return {
+      sourcesOpen: true,
+      studioOpen: true,
+      sourcesWidth: DEFAULT_SOURCES_WIDTH,
+      studioWidth: DEFAULT_STUDIO_WIDTH,
+    };
   }
 }
 
@@ -50,6 +77,11 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
   const [unchecked, setUnchecked] = useState(() => new Set());
   const [sourcesOpen, setSourcesOpen] = useState(() => loadPanelState().sourcesOpen);
   const [studioOpen, setStudioOpen] = useState(() => loadPanelState().studioOpen);
+  const [sourcesWidth, setSourcesWidth] = useState(() => loadPanelState().sourcesWidth);
+  const [studioWidth, setStudioWidth] = useState(() => loadPanelState().studioWidth);
+  const [isResizingSources, setIsResizingSources] = useState(false);
+  const [isResizingStudio, setIsResizingStudio] = useState(false);
+
   const [addOpen, setAddOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [autoOpenedAdd, setAutoOpenedAdd] = useState(false);
@@ -76,8 +108,71 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
   }, [notes]);
 
   useEffect(() => {
-    localStorage.setItem(PANELS_KEY, JSON.stringify({ sourcesOpen, studioOpen }));
-  }, [sourcesOpen, studioOpen]);
+    localStorage.setItem(
+      PANELS_KEY,
+      JSON.stringify({ sourcesOpen, studioOpen, sourcesWidth, studioWidth })
+    );
+  }, [sourcesOpen, studioOpen, sourcesWidth, studioWidth]);
+
+  // Drag-to-resize handle for SourcesPanel (left dock)
+  const handleSourcesMouseDown = useCallback(
+    (e) => {
+      e.preventDefault();
+      setIsResizingSources(true);
+      const startX = e.clientX;
+      const startWidth = sourcesWidth;
+
+      const onMouseMove = (moveEvent) => {
+        const delta = moveEvent.clientX - startX;
+        const newWidth = Math.min(Math.max(startWidth + delta, MIN_SOURCES_WIDTH), MAX_SOURCES_WIDTH);
+        setSourcesWidth(newWidth);
+      };
+
+      const onMouseUp = () => {
+        setIsResizingSources(false);
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    },
+    [sourcesWidth]
+  );
+
+  // Drag-to-resize handle for StudioPanel (right dock)
+  const handleStudioMouseDown = useCallback(
+    (e) => {
+      e.preventDefault();
+      setIsResizingStudio(true);
+      const startX = e.clientX;
+      const startWidth = studioWidth;
+
+      const onMouseMove = (moveEvent) => {
+        const delta = startX - moveEvent.clientX;
+        const newWidth = Math.min(Math.max(startWidth + delta, MIN_STUDIO_WIDTH), MAX_STUDIO_WIDTH);
+        setStudioWidth(newWidth);
+      };
+
+      const onMouseUp = () => {
+        setIsResizingStudio(false);
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      };
+
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    },
+    [studioWidth]
+  );
 
   // [ / ] toggle the sidebars, ignored while typing anywhere.
   useEffect(() => {
@@ -134,13 +229,13 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
         onToggleSources={() => setSourcesOpen((v) => !v)}
         onToggleStudio={() => setStudioOpen((v) => !v)}
       />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         <motion.div
           key="sources"
           initial={false}
-          animate={{ width: sourcesOpen ? SOURCES_WIDTH : 0 }}
-          transition={PANEL_TRANSITION}
-          className="flex overflow-hidden flex-shrink-0"
+          animate={{ width: sourcesOpen ? sourcesWidth : 0 }}
+          transition={isResizingSources ? { duration: 0 } : PANEL_TRANSITION}
+          className="relative flex overflow-hidden flex-shrink-0"
           style={{ pointerEvents: sourcesOpen ? 'auto' : 'none' }}
         >
           <SourcesPanel
@@ -150,6 +245,9 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
             dialogOpen={addOpen}
             onOpenPdf={(filename) => setActivePdf(filename)}
           />
+          {sourcesOpen && (
+            <ResizeHandle onMouseDown={handleSourcesMouseDown} side="right" />
+          )}
         </motion.div>
         <ChatPanel
           sourceFilter={sourceFilter}
@@ -161,11 +259,14 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
         <motion.div
           key="studio"
           initial={false}
-          animate={{ width: studioOpen ? STUDIO_WIDTH : 0 }}
-          transition={PANEL_TRANSITION}
-          className="flex overflow-hidden flex-shrink-0"
+          animate={{ width: studioOpen ? studioWidth : 0 }}
+          transition={isResizingStudio ? { duration: 0 } : PANEL_TRANSITION}
+          className="relative flex overflow-hidden flex-shrink-0"
           style={{ pointerEvents: studioOpen ? 'auto' : 'none' }}
         >
+          {studioOpen && (
+            <ResizeHandle onMouseDown={handleStudioMouseDown} side="left" />
+          )}
           <StudioPanel
             notes={notes}
             onAddNote={addNote}

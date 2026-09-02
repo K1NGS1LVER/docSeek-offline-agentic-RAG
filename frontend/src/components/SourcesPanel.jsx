@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { FileText, Plus, Trash2, Loader2, FolderOpen, RotateCcw, Search, Globe, ExternalLink, ChevronDown, ChevronRight, RefreshCw, Save } from 'lucide-react';
+import { FileText, Plus, Trash2, Loader2, FolderOpen, RotateCcw, Search, Globe, ExternalLink, ChevronDown, ChevronRight, RefreshCw, Save, Copy, Check } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { deleteSource, getDocumentViewUrl, searchWeb, importWebResults, deepWebResearch, saveResearchReport } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
 import { Button, Checkbox, IconButton, Segmented } from './ui';
@@ -383,13 +384,26 @@ function WebResearchSection() {
 
           {/* Deep research report */}
           {deepReport && (
-            <div className="space-y-2">
-              <div className="max-h-80 overflow-y-auto bg-panel rounded-lg p-3 text-sm text-text prose prose-sm border border-border/50">
-                <pre className="whitespace-pre-wrap text-xs font-mono leading-relaxed">{deepReport}</pre>
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-text">Research Report</span>
+                <div className="flex items-center gap-1.5">
+                  <IconButton
+                    icon={Copy}
+                    onClick={() => {
+                      navigator.clipboard.writeText(deepReport);
+                      addLog('Report copied to clipboard');
+                    }}
+                    title="Copy report markdown"
+                  />
+                  <Button size="sm" icon={Save} onClick={handleSaveReport}>
+                    Save to notebook
+                  </Button>
+                </div>
               </div>
-              <Button size="sm" icon={Save} onClick={handleSaveReport}>
-                Save report to notebook
-              </Button>
+              <div className="max-h-[32rem] overflow-y-auto bg-panel rounded-xl p-3.5 text-xs text-text border border-border/60 prose prose-invert max-w-none leading-relaxed">
+                <ReactMarkdown>{deepReport}</ReactMarkdown>
+              </div>
             </div>
           )}
         </div>
@@ -419,7 +433,7 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpe
   };
 
   return (
-    <aside className="w-72 flex-shrink-0 bg-surface border-r border-border flex flex-col min-h-0">
+    <aside className="w-full h-full flex-shrink-0 bg-surface border-r border-border flex flex-col min-h-0 overflow-hidden select-text">
       <div className="h-14 flex-shrink-0 flex items-center justify-between pl-6 pr-4 border-b border-border">
         <h2 className="text-base font-semibold text-text">Sources</h2>
         <Button variant="ghost" size="sm" icon={Plus} onClick={onAdd}>

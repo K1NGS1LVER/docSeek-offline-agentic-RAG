@@ -124,6 +124,11 @@ select {
 }
 
 /* Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

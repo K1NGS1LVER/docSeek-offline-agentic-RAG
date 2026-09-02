@@ -440,7 +440,7 @@ export default function StudioPanel({
   }
 
   return (
-    <aside className="w-80 flex-shrink-0 bg-surface border-l border-border flex flex-col min-h-0">
+    <aside className="w-full h-full flex-shrink-0 bg-surface border-l border-border flex flex-col min-h-0 overflow-hidden select-text">
       <div className="flex-shrink-0 px-4 pt-3 pb-2">
         <Segmented
           block
