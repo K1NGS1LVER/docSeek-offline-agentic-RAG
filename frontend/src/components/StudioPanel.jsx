@@ -750,8 +750,8 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
     return (
       <div className="flex flex-col h-full gap-3 select-text">
         {/* Header with Back, Title, and Actions */}
-        <div className="flex items-center justify-between gap-2 pb-2 border-b border-border/80 flex-shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center justify-between gap-2 pb-3 pt-0.5 border-b border-border/80 flex-shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
             <IconButton
               icon={ArrowLeft}
               size="sm"
@@ -762,8 +762,8 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
               }}
               title="Back to artifacts"
             />
-            <div className="p-1.5 rounded-md bg-surface-2 border border-border/60 text-accent flex-shrink-0">
-              <IconComponent className="w-3.5 h-3.5" />
+            <div className="p-1.5 rounded-lg bg-surface-2 border border-border/60 text-accent flex-shrink-0">
+              <IconComponent className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <h3 className="font-serif text-sm font-medium text-text truncate leading-tight">
@@ -814,7 +814,7 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
         </div>
 
         {error && (
-          <div className="flex items-start gap-2 bg-caution-soft border border-caution/25 rounded-xl px-3 py-2 text-xs text-caution flex-shrink-0">
+          <div className="flex items-start gap-2 bg-caution-soft border border-caution/25 rounded-xl px-4 py-3 text-xs text-caution flex-shrink-0">
             <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <span className="flex-1">{error}</span>
             <button onClick={() => setError(null)} title="Dismiss" className="flex-shrink-0 hover:text-text">
@@ -823,10 +823,10 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
           </div>
         )}
 
-        {/* Full-Height Scrollable Markdown Content */}
-        <div className="flex-1 overflow-y-auto bg-surface border border-border/70 rounded-xl p-5 answer-prose select-text">
+        {/* Full-Height Scrollable Markdown Content with Generous Reading Margins */}
+        <div className="flex-1 overflow-y-auto bg-surface border border-border/70 rounded-2xl p-6 sm:p-7 answer-prose select-text shadow-sm">
           {generating && !displayContent && (
-            <div className="flex items-center justify-center h-32 gap-2 text-text-muted font-sans text-sm">
+            <div className="flex items-center justify-center h-32 gap-2.5 text-text-muted font-sans text-sm">
               <Loader2 className="w-4 h-4 text-accent animate-spin" />
               <span>Generating document from sources…</span>
             </div>
@@ -837,7 +837,7 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
         </div>
 
         {/* Bottom Customization / Refine Bar */}
-        <div className="pt-2 border-t border-border/80 flex-shrink-0 space-y-2">
+        <div className="pt-3 border-t border-border/80 flex-shrink-0 space-y-2.5">
           <SectionLabel>Customize this document</SectionLabel>
           <div className="flex items-center gap-2">
             <input
