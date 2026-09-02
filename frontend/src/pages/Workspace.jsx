@@ -235,7 +235,7 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
           initial={false}
           animate={{ width: sourcesOpen ? sourcesWidth : 0 }}
           transition={isResizingSources ? { duration: 0 } : PANEL_TRANSITION}
-          className="relative flex overflow-hidden flex-shrink-0"
+          className="relative flex flex-col h-full min-h-0 overflow-hidden flex-shrink-0"
           style={{ pointerEvents: sourcesOpen ? 'auto' : 'none' }}
         >
           <SourcesPanel
@@ -261,7 +261,7 @@ function WorkspaceInner({ theme, setTheme, notebookId, notebook }) {
           initial={false}
           animate={{ width: studioOpen ? studioWidth : 0 }}
           transition={isResizingStudio ? { duration: 0 } : PANEL_TRANSITION}
-          className="relative flex overflow-hidden flex-shrink-0"
+          className="relative flex flex-col h-full min-h-0 overflow-hidden flex-shrink-0"
           style={{ pointerEvents: studioOpen ? 'auto' : 'none' }}
         >
           {studioOpen && (
