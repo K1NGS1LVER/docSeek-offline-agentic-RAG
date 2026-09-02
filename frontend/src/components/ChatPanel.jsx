@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download, Copy, Check, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { search, ask, research, streamSpeech, synthesizeSpeech, getDocumentViewUrl, createDictationSocket } from '../lib/api';
+import { search, ask, research, getSuggestions, streamSpeech, synthesizeSpeech, getDocumentViewUrl, createDictationSocket } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
 import { Segmented, Chip, IconButton } from './ui';
 import ClearChatModal from './ClearChatModal';
@@ -517,18 +517,6 @@ function ResultCard({ result, index }) {
   );
 }
 
-/* Suggested questions derived from the selected sources. */
-function buildSuggestions(sources) {
-  const cleaned = sources
-    .slice(0, 2)
-    .map((s) => s.filename.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim())
-    .filter(Boolean);
-  const items = cleaned.map((t) => `What is ${t} about?`);
-  if (sources.length > 1) items.push('What topics do my sources cover?');
-  items.push('Summarize the key ideas across my sources.');
-  return items.slice(0, 3);
-}
-
 /* ================================================================== */
 export default function ChatPanel({
   sourceFilter,
@@ -541,6 +529,8 @@ export default function ChatPanel({
   const { addLog } = useSystem();
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
+  const [suggestions, setSuggestions] = useState([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [topK, setTopK] = useState('auto');
   const [mode, setMode] = useState('ask');
@@ -608,8 +598,36 @@ export default function ChatPanel({
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const { sources: allSources } = useSystem();
-  const suggestions = useMemo(() => buildSuggestions(allSources), [allSources]);
+  useEffect(() => {
+    if (!notebookId || totalSources === 0) {
+      setSuggestions([]);
+      setSuggestionsLoading(false);
+      return;
+    }
+
+    let active = true;
+    setSuggestionsLoading(true);
+
+    getSuggestions(notebookId)
+      .then((res) => {
+        if (!active) return;
+        const items = Array.isArray(res?.data)
+          ? res.data
+          : (res?.data?.suggestions || []);
+        setSuggestions(items);
+      })
+      .catch(() => {
+        if (!active) return;
+        setSuggestions([]);
+      })
+      .finally(() => {
+        if (active) setSuggestionsLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [notebookId, totalSources]);
 
   // Records every question asked this session, so the Studio panel's Chat
   // tab can list and jump to them. Only fires when a question is submitted,
@@ -676,7 +694,7 @@ export default function ChatPanel({
       ...prev,
       {
         type: 'answer', id: nextIdRef.current++, query, text: '', trace: [], sources: [],
-        isStreaming: true, ts: Date.now(),
+        followups: [], isStreaming: true, ts: Date.now(),
       },
     ]);
 
@@ -704,6 +722,7 @@ export default function ChatPanel({
             updateLast((msg) => ({ trace: [...(msg.trace || []), ev] }));
           },
           onSources: (sources) => updateLast(() => ({ sources })),
+          onFollowups: (followups) => updateLast(() => ({ followups })),
         }
       );
 
@@ -735,7 +754,7 @@ export default function ChatPanel({
       ...prev,
       {
         type: 'answer', id: nextIdRef.current++, query, text: '', trace: [], sources: [],
-        isStreaming: true, isReport: true, ts: Date.now(),
+        followups: [], isStreaming: true, isReport: true, ts: Date.now(),
       },
     ]);
 
@@ -761,6 +780,7 @@ export default function ChatPanel({
             updateLast((msg) => ({ trace: [...(msg.trace || []), ev] }));
           },
           onSources: (sources) => updateLast(() => ({ sources })),
+          onFollowups: (followups) => updateLast(() => ({ followups })),
         }
       );
       updateLast(() => ({ text: data, isStreaming: false, latency }));
@@ -816,12 +836,16 @@ export default function ChatPanel({
                   with citations.
                 </p>
                 {totalSources > 0 && (
-                  <div className="flex flex-wrap justify-center gap-2">
-                    {suggestions.map((q) => (
-                      <Chip key={q} onClick={() => submitQuery(q)}>
-                        {q}
-                      </Chip>
-                    ))}
+                  <div className="flex flex-wrap justify-center items-center gap-2">
+                    {suggestionsLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-text-muted" />
+                    ) : (
+                      suggestions.map((q) => (
+                        <Chip key={q} onClick={() => submitQuery(q)}>
+                          {q}
+                        </Chip>
+                      ))
+                    )}
                   </div>
                 )}
               </div>
@@ -893,6 +917,20 @@ export default function ChatPanel({
                             )}
                           </div>
                         )}
+                      </div>
+                    )}
+                    {!msg.isStreaming && msg.followups?.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-border">
+                        <p className="font-mono text-2xs uppercase tracking-[0.14em] text-text-muted mb-2">
+                          Follow up
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {msg.followups.map((q) => (
+                            <Chip key={q} onClick={() => submitQuery(q)}>
+                              {q}
+                            </Chip>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </div>
