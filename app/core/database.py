@@ -171,13 +171,15 @@ def fetch_document_by_id(db_path: str, doc_id: int) -> Optional[Dict[str, Any]]:
         return None
     return {"id": row[0], "content": row[1], "metadata": row[2]}
 
+get_document = fetch_document_by_id
+
 def get_all_documents(db_path: str) -> List[Dict[str, Any]]:
     """Fetch all documents (for index rebuilding)"""
     with get_db(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, content, metadata FROM documents")
+        cursor.execute("SELECT id, content, metadata, source_file FROM documents")
         rows = cursor.fetchall()
-    return [{"id": row[0], "content": row[1], "metadata": row[2]} for row in rows]
+    return [{"id": row[0], "content": row[1], "metadata": row[2], "source_file": row[3]} for row in rows]
 
 def fetch_chunks_by_source(db_path: str, source_file: str) -> List[Dict[str, Any]]:
     """Fetch all chunks sharing a source_file, via the indexed column."""

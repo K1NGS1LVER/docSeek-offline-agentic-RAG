@@ -55,6 +55,7 @@ class OllamaLLM:
         prompt: str,
         max_tokens: int = 400,
         schema: dict | None = None,
+        model: str | None = None,
     ) -> dict | None:
         """One-shot structured completion for agent decisions (plan/grade/podcast).
 
@@ -74,7 +75,7 @@ class OllamaLLM:
 
         try:
             response = await self.client.chat.completions.create(
-                model=self.model,
+                model=model or self.model,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": prompt},

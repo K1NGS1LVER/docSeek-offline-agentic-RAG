@@ -33,6 +33,7 @@ from app.core.config import (
     DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS,
     SEARXNG_URL,
     LLM_KEEP_ALIVE,
+    LLM_LIGHT_MODEL,
 )
 from app.core import database, parsing, chunking, reranker, stt, tts, podcast, research, web_research
 from app.core.engine import VectorEngine, clear_model_memory
@@ -293,6 +294,12 @@ class SaveReportRequest(BaseModel):
     notebook_id: str
     query: str
     report_markdown: str
+
+
+class ArtifactRequest(BaseModel):
+    notebook_id: str
+    artifact_type: str  # "briefing" | "study_guide" | "faq" | "timeline"
+    focus: Optional[str] = None
 
 
 # ============================================================================
@@ -868,12 +875,170 @@ async def ask(request: AskRequest):
                 f"{len(search_results)} chunks, streaming LLM response..."
             )
 
+            full_answer = ""
             async for chunk in llm.stream_answer(request.query, context):
+                full_answer += chunk
                 yield {"data": json.dumps(chunk)}
+
+            # Generate follow-up suggestions (non-blocking to answer delivery)
+            try:
+                followup_result = await llm.complete_json(
+                    system="Generate 3 brief follow-up questions the user could ask next. "
+                           "Return JSON: {\"followups\": [\"q1\", \"q2\", \"q3\"]}. "
+                           "Questions should dig deeper, ask for comparisons, or explore related aspects.",
+                    prompt=f"User question: {request.query}\n\nAnswer given (excerpt): {full_answer[:600]}",
+                    max_tokens=120,
+                    model=LLM_LIGHT_MODEL,
+                )
+                followups = (followup_result or {}).get("followups", [])
+                if isinstance(followups, list) and followups:
+                    yield {"event": "followups", "data": json.dumps(followups[:3])}
+            except Exception:
+                pass  # Follow-ups are best-effort; never fail the answer
 
         except Exception as e:
             logger.error(f"ASK endpoint error: {e}")
             yield {"data": json.dumps(get_friendly_error(e))}
+
+    return EventSourceResponse(event_stream())
+
+
+# ============================================================================
+# SUGGESTIONS & ARTIFACTS
+# ============================================================================
+
+
+@app.get("/suggestions")
+async def get_suggestions(notebook_id: str = Query(...)):
+    rt = get_runtime(notebook_id)
+    if rt.engine.get_total_vectors() == 0:
+        return {"suggestions": []}
+
+    all_docs = database.get_all_documents(rt.db_path)
+    if not all_docs:
+        return {"suggestions": []}
+
+    seen_sources = set()
+    sampled_chunks = []
+    for doc in all_docs:
+        source = doc.get("source_file")
+        if not source and doc.get("metadata"):
+            try:
+                meta = json.loads(doc["metadata"]) if isinstance(doc["metadata"], str) else doc["metadata"]
+                source = meta.get("source_file") or meta.get("filename")
+            except Exception:
+                pass
+        source = source or f"doc_{doc.get('id', 'unknown')}"
+        if source not in seen_sources:
+            seen_sources.add(source)
+            content = (doc.get("content") or "").strip()
+            if content:
+                sampled_chunks.append((source, content[:500]))
+            if len(seen_sources) >= 8:
+                break
+
+    if not sampled_chunks:
+        return {"suggestions": []}
+
+    context_parts = [f"Source ({src}):\n{text}" for src, text in sampled_chunks]
+    context_str = "\n\n".join(context_parts)
+    prompt = f"{context_str}\n\nGenerate 4 concise, specific starter questions based on the content above."
+
+    if not llm:
+        return {"suggestions": []}
+
+    try:
+        result = await llm.complete_json(
+            system="You generate short, specific starter questions for a research notebook. "
+                   "Return a JSON object: {\"questions\": [\"q1\", \"q2\", \"q3\", \"q4\"]}. "
+                   "Questions should help the user explore and compare their sources. "
+                   "Be specific to the actual content, not generic.",
+            prompt=prompt,
+            max_tokens=200,
+        )
+        questions = (result or {}).get("questions", [])
+        if not isinstance(questions, list):
+            questions = []
+        return {"suggestions": questions[:4]}
+    except Exception as e:
+        logger.warning(f"Failed to generate suggestions: {e}")
+        return {"suggestions": []}
+
+
+ARTIFACT_PROMPTS = {
+    "briefing": {
+        "system": "You are a professional analyst. Write a concise executive briefing document "
+                  "that synthesizes the key points from the provided sources. Use clear headings, "
+                  "bullet points, and highlight critical findings. Cite sources with [n] notation.",
+        "title": "Executive Briefing",
+    },
+    "study_guide": {
+        "system": "You are an expert educator. Create a comprehensive study guide from the provided sources. "
+                  "Include: key vocabulary/definitions, main concepts explained, review questions with answers, "
+                  "and essay-style prompts for deeper analysis. Cite sources with [n] notation.",
+        "title": "Study Guide",
+    },
+    "faq": {
+        "system": "You are a knowledgeable assistant. Generate a FAQ document with 8-12 frequently asked questions "
+                  "and detailed answers based on the provided sources. Cover the most important topics, "
+                  "common confusions, and practical applications. Cite sources with [n] notation.",
+        "title": "FAQ",
+    },
+    "timeline": {
+        "system": "You are a research analyst. Create a chronological timeline of key events, milestones, "
+                  "developments, or steps described in the provided sources. Use a clear date/sequence format. "
+                  "If exact dates aren't available, use relative ordering. Cite sources with [n] notation.",
+        "title": "Timeline",
+    },
+}
+
+
+@app.post("/artifacts/generate")
+async def generate_artifact(request: ArtifactRequest):
+    if request.artifact_type not in ARTIFACT_PROMPTS:
+        raise HTTPException(status_code=400, detail=f"Unknown artifact type: {request.artifact_type}")
+
+    rt = get_runtime(request.notebook_id)
+    prompt_config = ARTIFACT_PROMPTS[request.artifact_type]
+
+    summary_query = request.focus or "Key topics and main ideas"
+    query_vec = await run_in_threadpool(rt.engine.embed, summary_query)
+    ids, scores = await run_in_threadpool(rt.engine.search, query_vec, 15)
+
+    results = []
+    for doc_id, score in zip(ids, scores):
+        doc_id = int(doc_id)
+        if doc_id < 0:
+            continue
+        doc = database.get_document(rt.db_path, doc_id)
+        if doc:
+            source_meta = {}
+            if doc.get("metadata"):
+                try:
+                    source_meta = json.loads(doc["metadata"]) if isinstance(doc["metadata"], str) else doc["metadata"]
+                except Exception:
+                    source_meta = {"raw": doc["metadata"]}
+            results.append({
+                "id": doc_id,
+                "content": doc.get("content", ""),
+                "score": float(score),
+                "source": source_meta,
+            })
+
+    context = llm.build_context(results) if llm else "No relevant documents were found."
+    system_prompt = prompt_config["system"]
+    if request.focus:
+        system_prompt += f"\n\nFocus especially on: {request.focus}"
+
+    user_prompt = f"<context>\n{context}\n</context>\n\nGenerate the {prompt_config['title']}."
+
+    async def event_stream():
+        full_text = ""
+        if llm:
+            async for chunk in llm.stream_complete(system_prompt, user_prompt):
+                full_text += chunk
+                yield {"data": json.dumps(chunk)}
+        yield {"event": "done", "data": json.dumps({"title": prompt_config["title"], "full_text": full_text})}
 
     return EventSourceResponse(event_stream())
 

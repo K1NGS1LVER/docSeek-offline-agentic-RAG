@@ -68,6 +68,7 @@ LLM_BASE_URL = os.environ.get("DOCSEEK_LLM_BASE_URL", "http://localhost:11434/v1
 #   - `granite3.1-dense:2b` (128k context, extremely low VRAM footprint)
 #   - `phi3:mini` (fallback, 3.8B parameters)
 LLM_MODEL = os.environ.get("DOCSEEK_LLM_MODEL", "qwen2.5:1.5b")
+LLM_LIGHT_MODEL = os.environ.get("DOCSEEK_LLM_LIGHT_MODEL", LLM_MODEL)
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 1024
 
