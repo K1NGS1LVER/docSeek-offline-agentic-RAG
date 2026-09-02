@@ -37,3 +37,4 @@ trafilatura
 # The Kokoro-82M weights and a spaCy English model download once on first use,
 # then run fully offline. `brew install espeak-ng` improves pronunciation of
 # out-of-vocabulary words, but English works without it.
+ddgs

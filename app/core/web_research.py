@@ -28,52 +28,98 @@ HEALTH_CACHE_TTL = 30  # seconds
 
 
 def is_available() -> bool:
-    """Check if SearXNG is reachable. Cached for 30s."""
+    """Check if web search is available (SearXNG or DuckDuckGo fallback). Cached for 30s."""
     now = time.time()
     if now - _health_cache["checked_at"] < HEALTH_CACHE_TTL:
         return _health_cache["available"]
+
+    # 1. Try SearXNG first
     try:
         r = requests.get(
             f"{SEARXNG_URL}/search",
             params={"q": "test", "format": "json"},
-            timeout=3,
+            timeout=2,
         )
-        available = r.status_code == 200
+        if r.status_code == 200:
+            _health_cache.update(available=True, checked_at=now, engine="searxng")
+            return True
     except Exception:
-        available = False
-    _health_cache.update(available=available, checked_at=now)
-    return available
+        pass
+
+    # 2. Check if ddgs or duckduckgo_search fallback is installed
+    try:
+        try:
+            import ddgs  # noqa: F401
+        except ImportError:
+            import duckduckgo_search  # noqa: F401
+        _health_cache.update(available=True, checked_at=now, engine="duckduckgo")
+        return True
+    except ImportError:
+        pass
+
+    _health_cache.update(available=False, checked_at=now, engine=None)
+    return False
 
 
 # ── Search ──────────────────────────────────────────────────────
 
 
 def search_web(query: str, num_results: int = RESEARCH_MAX_RESULTS) -> list[dict]:
-    """Query SearXNG, return deduplicated [{title, url, snippet, engines}]."""
-    r = requests.get(
-        f"{SEARXNG_URL}/search",
-        params={"q": query, "format": "json", "pageno": 1},
-        timeout=15,
-    )
-    r.raise_for_status()
-    data = r.json()
+    """Query SearXNG, falling back to DuckDuckGo if SearXNG is unavailable."""
+    # 1. Try SearXNG
+    try:
+        r = requests.get(
+            f"{SEARXNG_URL}/search",
+            params={"q": query, "format": "json", "pageno": 1},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            seen_urls: set[str] = set()
+            results: list[dict] = []
+            for item in data.get("results", []):
+                url = item.get("url", "")
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                results.append({
+                    "title": item.get("title", ""),
+                    "url": url,
+                    "snippet": item.get("content", ""),
+                    "engines": item.get("engines", []),
+                })
+                if len(results) >= num_results:
+                    break
+            if results:
+                return results
+    except Exception as e:
+        logger.info("SearXNG not reachable (%s), falling back to DuckDuckGo", e)
 
-    seen_urls: set[str] = set()
-    results: list[dict] = []
-    for item in data.get("results", []):
-        url = item.get("url", "")
-        if not url or url in seen_urls:
-            continue
-        seen_urls.add(url)
-        results.append({
-            "title": item.get("title", ""),
-            "url": url,
-            "snippet": item.get("content", ""),
-            "engines": item.get("engines", []),
-        })
-        if len(results) >= num_results:
-            break
-    return results
+    # 2. Fallback: DuckDuckGo via ddgs
+    try:
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            from duckduckgo_search import DDGS
+
+        results = []
+        seen_urls = set()
+        with DDGS() as ddgs_client:
+            for r in ddgs_client.text(query, max_results=num_results):
+                url = r.get("href", "")
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                results.append({
+                    "title": r.get("title", ""),
+                    "url": url,
+                    "snippet": r.get("body", ""),
+                    "engines": ["duckduckgo"],
+                })
+        return results
+    except Exception as e:
+        logger.error("DuckDuckGo fallback search failed: %s", e)
+        return []
 
 
 # ── Content Extraction ──────────────────────────────────────────

@@ -1733,16 +1733,17 @@ async def rebuild_index(notebook_id: str = Query(...), _: None = Depends(require
 
 @app.get("/web-research/health")
 async def web_research_health():
-    """Check if SearXNG is reachable for web research."""
+    """Check if SearXNG or DuckDuckGo fallback is reachable for web research."""
     available = await run_in_threadpool(web_research.is_available)
-    return {"available": available, "searxng_url": SEARXNG_URL}
+    engine = web_research._health_cache.get("engine")
+    return {"available": available, "engine": engine, "searxng_url": SEARXNG_URL}
 
 
 @app.post("/web-research/search")
 async def web_research_search(request: WebSearchRequest):
     """Quick web search — returns results for preview/import."""
     if not web_research.is_available():
-        raise HTTPException(503, "SearXNG is not available. Start it with: docker compose up -d")
+        raise HTTPException(503, "Web search is not available. Start SearXNG with: docker compose up -d or install duckduckgo-search")
     results = await run_in_threadpool(
         web_research.search_web, request.query, request.num_results
     )
@@ -1763,7 +1764,7 @@ async def web_research_deep(request: DeepResearchRequest):
     Streams progress via SSE using the same typed-event protocol as /ask.
     """
     if not web_research.is_available():
-        raise HTTPException(503, "SearXNG is not available. Start it with: docker compose up -d")
+        raise HTTPException(503, "Web search is not available. Start SearXNG with: docker compose up -d or install duckduckgo-search")
 
     async def event_generator():
         async for event in web_research.deep_research(
