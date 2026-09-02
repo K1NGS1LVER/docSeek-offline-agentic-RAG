@@ -591,7 +591,7 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpe
               { value: 'sources', label: `Sources (${sources.length})` },
               {
                 value: 'research',
-                label: resultsCount > 0 ? `Research (${resultsCount})` : 'Web Research',
+                label: resultsCount > 0 ? `Web Research (${resultsCount})` : 'Web Research',
               },
             ]}
           />

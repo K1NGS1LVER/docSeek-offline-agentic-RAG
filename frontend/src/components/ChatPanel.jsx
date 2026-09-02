@@ -520,7 +520,7 @@ function ResultCard({ result, index }) {
 const MODES = [
   { value: 'ask', label: 'Ask', icon: Sparkles, desc: 'Grounded Q&A' },
   { value: 'search', label: 'Search', icon: FileText, desc: 'Chunk retrieval' },
-  { value: 'research', label: 'Research', icon: Compass, desc: 'Deep research' },
+  { value: 'research', label: 'Deep Dive', icon: Compass, desc: 'Exhaustive source analysis' },
 ];
 
 function ModeDropdown({ mode, setMode, disabled }) {
@@ -1077,7 +1077,7 @@ export default function ChatPanel({
               !canType
                 ? 'Select at least one source'
                 : mode === 'research'
-                ? 'Research a question across your sources…'
+                ? 'Deep dive into your sources…'
                 : mode === 'search'
                 ? 'Search your sources…'
                 : 'Ask your sources…'
