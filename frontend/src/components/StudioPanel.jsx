@@ -25,29 +25,53 @@ import { Button, IconButton, SectionLabel, Segmented, inputCls, textareaCls } fr
 
 function NoteCard({ note, onDelete }) {
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(`${note.title ? note.title + '\n\n' : ''}${note.body || ''}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <div
-      className="group bg-panel border border-border rounded-xl p-4 cursor-pointer hover:border-border-bright hover:-translate-y-px transition-all duration-200"
+      className="group bg-panel border border-border rounded-xl p-4 cursor-pointer hover:border-border-bright hover:-translate-y-px transition-all duration-200 select-text"
       onClick={() => setExpanded(!expanded)}
     >
       <div className="flex items-start justify-between gap-2">
         <h4 className="font-serif text-base font-medium text-text min-w-0 break-words">
           {note.title || 'Untitled note'}
         </h4>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(note.id);
-          }}
-          title="Delete note"
-          className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-caution transition-all flex-shrink-0 mt-1"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mt-0.5">
+          <button
+            onClick={handleCopy}
+            title={copied ? 'Copied!' : 'Copy note'}
+            className="text-text-muted hover:text-text p-1 rounded transition-colors cursor-pointer"
+          >
+            {copied ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(note.id);
+            }}
+            title="Delete note"
+            className="text-text-muted hover:text-caution p-1 rounded transition-colors cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
-      <p className={`text-sm text-text-dim mt-1 whitespace-pre-wrap ${expanded ? '' : 'line-clamp-3'}`}>
-        {note.body}
-      </p>
+      {expanded ? (
+        <div className="text-sm text-text-dim mt-2 prose prose-invert max-w-none leading-relaxed select-text">
+          <ReactMarkdown>{note.body}</ReactMarkdown>
+        </div>
+      ) : (
+        <p className="text-sm text-text-dim mt-1 line-clamp-3 whitespace-pre-wrap">
+          {note.body}
+        </p>
+      )}
       <div className="font-mono text-2xs text-text-muted mt-2">{note.meta}</div>
     </div>
   );
@@ -55,6 +79,7 @@ function NoteCard({ note, onDelete }) {
 
 function NotesTab({ notes, onAdd, onDelete }) {
   const [drafting, setDrafting] = useState(false);
+  const [previewMode, setPreviewMode] = useState('edit');
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
 
@@ -64,12 +89,24 @@ function NotesTab({ notes, onAdd, onDelete }) {
     setTitle('');
     setBody('');
     setDrafting(false);
+    setPreviewMode('edit');
   };
 
   return (
     <div className="flex flex-col gap-4">
       {drafting ? (
         <div className="bg-panel border border-border rounded-xl p-4 space-y-2">
+          <div className="flex items-center justify-between pb-1">
+            <span className="font-mono text-3xs uppercase tracking-wider text-text-muted">Draft note</span>
+            <Segmented
+              value={previewMode}
+              onChange={setPreviewMode}
+              options={[
+                { value: 'edit', label: 'Write' },
+                { value: 'preview', label: 'Preview' },
+              ]}
+            />
+          </div>
           <input
             autoFocus
             value={title}
@@ -77,14 +114,20 @@ function NotesTab({ notes, onAdd, onDelete }) {
             placeholder="Note title"
             className={inputCls}
           />
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={4}
-            placeholder="Write something worth keeping…"
-            className={textareaCls}
-          />
-          <div className="flex justify-end gap-2">
+          {previewMode === 'edit' ? (
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={4}
+              placeholder="Write markdown note…"
+              className={textareaCls}
+            />
+          ) : (
+            <div className="min-h-[100px] p-3 rounded-lg bg-carbon border border-border text-xs text-text prose prose-invert max-w-none">
+              {body ? <ReactMarkdown>{body}</ReactMarkdown> : <span className="text-text-muted italic">Nothing to preview</span>}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
             <Button variant="ghost" size="sm" onClick={() => setDrafting(false)}>
               Cancel
             </Button>
@@ -574,6 +617,7 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
     loadSavedArtifacts(storageKey, legacyStorageKey)
   );
   const [activeArtifactId, setActiveArtifactId] = useState(null);
+  const [selectedVersionIndex, setSelectedVersionIndex] = useState(null);
   const [focus, setFocus] = useState('');
   const [refinePrompt, setRefinePrompt] = useState('');
   const [generating, setGenerating] = useState(null);
@@ -607,6 +651,7 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
 
     // Switch view to full sidebar reader immediately so user sees the live stream
     setActiveArtifactId(newId);
+    setSelectedVersionIndex(null);
 
     try {
       await generateArtifact(notebookId, type, focus.trim(), {
@@ -615,11 +660,13 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
           setStreamText((prev) => prev + chunk);
         },
         onDone: (data) => {
+          const text = data.full_text || accumulated;
           finalResult = {
             id: newId,
             type,
             title: data.title || typeConfig?.label || 'Artifact',
-            content: data.full_text || accumulated,
+            content: text,
+            versions: [text],
             focus: focus.trim(),
             createdAt: timestamp,
           };
@@ -635,6 +682,7 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
           type,
           title: typeConfig?.label || 'Artifact',
           content: accumulated,
+          versions: [accumulated],
           focus: focus.trim(),
           createdAt: timestamp,
         };
@@ -670,17 +718,20 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
         onDone: (data) => {
           finalContent = data.full_text || accumulated;
           setArtifacts((prev) =>
-            prev.map((art) =>
-              art.id === activeArtifact.id
-                ? {
-                    ...art,
-                    content: finalContent,
-                    title: data.title || art.title,
-                    updatedAt: updateTime,
-                  }
-                : art
-            )
+            prev.map((art) => {
+              if (art.id !== activeArtifact.id) return art;
+              const prevVers = art.versions && art.versions.length ? art.versions : [art.content];
+              const nextVers = [...prevVers, finalContent];
+              return {
+                ...art,
+                content: finalContent,
+                versions: nextVers,
+                title: data.title || art.title,
+                updatedAt: updateTime,
+              };
+            })
           );
+          setSelectedVersionIndex(null);
           setGenerating(null);
           setStreamText('');
           setRefinePrompt('');
@@ -689,16 +740,19 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
 
       if (!finalContent && accumulated) {
         setArtifacts((prev) =>
-          prev.map((art) =>
-            art.id === activeArtifact.id
-              ? {
-                  ...art,
-                  content: accumulated,
-                  updatedAt: updateTime,
-                }
-              : art
-          )
+          prev.map((art) => {
+            if (art.id !== activeArtifact.id) return art;
+            const prevVers = art.versions && art.versions.length ? art.versions : [art.content];
+            const nextVers = [...prevVers, accumulated];
+            return {
+              ...art,
+              content: accumulated,
+              versions: nextVers,
+              updatedAt: updateTime,
+            };
+          })
         );
+        setSelectedVersionIndex(null);
         setGenerating(null);
         setStreamText('');
         setRefinePrompt('');
@@ -743,7 +797,9 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
   // If in full-sidebar reader view (viewing or generating a specific document)
   if (activeArtifactId !== null) {
     const displayTitle = activeArtifact?.title || (generating && ARTIFACT_TYPES.find((t) => t.type === generating)?.label) || 'Document';
-    const displayContent = streamText || activeArtifact?.content || '';
+    const activeVersions = activeArtifact?.versions || (activeArtifact?.content ? [activeArtifact.content] : []);
+    const currentVersionIdx = selectedVersionIndex !== null ? selectedVersionIndex : (activeVersions.length ? activeVersions.length - 1 : 0);
+    const displayContent = streamText || (activeVersions.length > 0 ? activeVersions[currentVersionIdx] : (activeArtifact?.content || ''));
     const activeConfig = ARTIFACT_TYPES.find((t) => t.type === activeArtifact?.type);
     const IconComponent = activeConfig?.icon || FileText;
 
@@ -757,6 +813,7 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
               size="sm"
               onClick={() => {
                 setActiveArtifactId(null);
+                setSelectedVersionIndex(null);
                 setStreamText('');
                 setError(null);
               }}
@@ -769,7 +826,28 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
               <h3 className="font-serif text-sm font-medium text-text truncate leading-tight">
                 {displayTitle}
               </h3>
-              {activeArtifact?.createdAt && (
+              {activeVersions.length > 1 && !generating ? (
+                <div className="flex items-center gap-1 mt-1 font-mono text-3xs">
+                  <span className="text-text-muted">Rev:</span>
+                  {activeVersions.map((_, vIdx) => {
+                    const isSelected = vIdx === currentVersionIdx;
+                    return (
+                      <button
+                        key={vIdx}
+                        onClick={() => setSelectedVersionIndex(vIdx)}
+                        className={`px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
+                          isSelected
+                            ? 'bg-accent text-on-accent font-semibold'
+                            : 'bg-surface-2 hover:bg-surface text-text-muted'
+                        }`}
+                        title={`Revision ${vIdx + 1}`}
+                      >
+                        v{vIdx + 1}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : activeArtifact?.createdAt ? (
                 <p className="font-mono text-3xs text-text-dim mt-0.5">
                   {new Date(activeArtifact.updatedAt || activeArtifact.createdAt).toLocaleTimeString([], {
                     hour: '2-digit',
@@ -777,7 +855,7 @@ function ArtifactsTab({ selectedSources = [], onAddNote }) {
                   })}
                   {activeArtifact.updatedAt ? ' (customized)' : ''}
                 </p>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -1001,18 +1079,13 @@ export default function StudioPanel({
   onDeleteNote,
   selectedSources = [],
   questions = [],
+  activeTab: controlledTab,
+  onTabChange: setControlledTab,
 }) {
   const { notebookId } = useParams();
-  const [tab, setTab] = useState('notes');
-  const [autoSwitched, setAutoSwitched] = useState(false);
-
-  // Jump straight to the question list the first time a conversation
-  // starts, without fighting a manual tab switch afterward (state adjusted
-  // during render, not in an effect).
-  if (questions.length > 0 && !autoSwitched) {
-    setAutoSwitched(true);
-    setTab('chat');
-  }
+  const [internalTab, setInternalTab] = useState('notes');
+  const tab = controlledTab !== undefined ? controlledTab : internalTab;
+  const setTab = setControlledTab !== undefined ? setControlledTab : setInternalTab;
 
   return (
     <aside className="w-full h-full flex-shrink-0 bg-surface border-l border-border flex flex-col min-h-0 overflow-hidden select-text">

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download, Copy, Check, Trash2, Sparkles, Compass } from 'lucide-react';
+import { Send, FileText, Loader2, Bot, ChevronDown, StickyNote, Mic, Square, Volume2, VolumeX, Download, Copy, Check, Trash2, Sparkles, Compass, ArrowDown, ExternalLink, CheckCircle2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { search, ask, research, getSuggestions, streamSpeech, synthesizeSpeech, getDocumentViewUrl, createDictationSocket } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
@@ -281,22 +281,21 @@ function MicButton({ disabled, onStartDictation, onPartialText, onFinalText, onE
   );
 }
 
-const STAGE_STYLES = {
-  plan: 'text-accent',
-  retrieve: 'text-text-muted',
-  rerank: 'text-accent',
-  grade: 'text-success',
-  loop: 'text-caution',
+const STAGE_CONFIG = {
+  plan: { text: 'text-accent', dot: 'bg-accent', label: 'PLAN' },
+  retrieve: { text: 'text-info', dot: 'bg-info', label: 'RETRIEVE' },
+  rerank: { text: 'text-accent', dot: 'bg-accent', label: 'RERANK' },
+  grade: { text: 'text-success', dot: 'bg-success', label: 'GRADE' },
+  loop: { text: 'text-caution', dot: 'bg-caution', label: 'REFINE' },
 };
 
-/* ── Agent activity timeline ───────────────────────── */
+/* ── Agent activity timeline with structured stepped timeline ───────── */
 function AgentTrace({ trace, isStreaming }) {
   const [open, setOpen] = useState(true);
   const [collapsedOnFinish, setCollapsedOnFinish] = useState(false);
 
   // Auto-collapse once the answer finishes so completed turns stay tidy;
-  // only ever does this once so a manual re-open sticks (state adjusted
-  // during render, not in an effect).
+  // only ever does this once so a manual re-open sticks.
   if (!isStreaming && !collapsedOnFinish) {
     setCollapsedOnFinish(true);
     setOpen(false);
@@ -305,31 +304,49 @@ function AgentTrace({ trace, isStreaming }) {
   if (!trace || trace.length === 0) return null;
 
   return (
-    <div className="bg-surface border border-border rounded-lg px-4 py-3 font-mono text-xs">
+    <div className="bg-surface border border-border rounded-xl px-4 py-3 font-mono text-xs transition-colors">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 text-2xs tracking-[0.14em] uppercase text-text-muted"
+        className="w-full flex items-center gap-2 text-2xs tracking-[0.14em] uppercase text-text-muted hover:text-text transition-colors"
       >
-        <Bot className="w-3 h-3" />
-        Agent activity
-        {isStreaming && <Loader2 className="w-3 h-3 animate-spin text-accent" />}
-        <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${open ? '' : '-rotate-90'}`} />
+        <Bot className="w-3.5 h-3.5 text-accent" />
+        <span>Agent reasoning</span>
+        <span className="text-text-muted/70 font-normal">
+          ({trace.length} step{trace.length !== 1 ? 's' : ''})
+        </span>
+        {isStreaming ? (
+          <span className="flex items-center gap-1.5 ml-2 text-accent">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            <span className="text-3xs lowercase font-mono">evaluating</span>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 ml-2 text-success font-mono text-3xs lowercase">
+            <CheckCircle2 className="w-3 h-3" />
+            <span>complete</span>
+          </span>
+        )}
+        <ChevronDown className={`w-3.5 h-3.5 ml-auto transition-transform duration-200 ${open ? '' : '-rotate-90'}`} />
       </button>
+
       {open && (
-        <div className="mt-2 space-y-1">
-          {trace.map((ev, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex items-baseline gap-4"
-            >
-              <span className={`w-16 flex-shrink-0 uppercase tracking-[0.06em] font-medium ${STAGE_STYLES[ev.stage] || 'text-text-muted'}`}>
-                {ev.stage}
-              </span>
-              <span className="text-text-dim">{ev.message}</span>
-            </motion.div>
-          ))}
+        <div className="mt-3 pl-2 relative before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-px before:bg-border space-y-2">
+          {trace.map((ev, i) => {
+            const conf = STAGE_CONFIG[ev.stage] || { text: 'text-text-muted', dot: 'bg-text-muted', label: (ev.stage || 'STAGE').toUpperCase() };
+            return (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, x: -4 }}
+                animate={{ opacity: 1, x: 0 }}
+                className="flex items-start gap-3 relative pl-3"
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${conf.dot} absolute -left-[4px] top-1.5 ring-4 ring-surface flex-shrink-0`} />
+                <span className={`w-16 flex-shrink-0 text-3xs uppercase tracking-wider font-semibold ${conf.text}`}>
+                  {conf.label}
+                </span>
+                <span className="text-xs text-text-dim leading-relaxed min-w-0 flex-1">{ev.message}</span>
+              </motion.div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -383,6 +400,97 @@ function messagesToMarkdown(messages) {
   return lines.join('\n');
 }
 
+/* ── Hover-peek Citation Chip with Grounding Excerpt ─ */
+function CitationChip({ index, src, notebookId }) {
+  const [hovered, setHovered] = useState(false);
+  const timeoutRef = useRef(null);
+
+  const handleMouseEnter = () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setHovered(true);
+  };
+
+  const handleMouseLeave = () => {
+    timeoutRef.current = setTimeout(() => {
+      setHovered(false);
+    }, 200);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
+
+  if (!src) return <span>[{index}]</span>;
+
+  const pct = src.score != null ? Math.round(Math.min(Math.max(src.score, 0), 1) * 100) : null;
+  const filename = src.source?.filename || `chunk #${src.id}`;
+  const docUrl = getDocumentViewUrl(notebookId, src.id);
+
+  return (
+    <span
+      className="relative inline-block align-baseline"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      <a
+        className="citation-chip"
+        style={{ textDecoration: 'none' }}
+        href={docUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`Citation ${index}: ${filename}`}
+      >
+        {index}
+      </a>
+
+      {hovered && (
+        <span
+          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 sm:w-80 p-3 bg-surface border border-border-bright rounded-xl shadow-2xl z-50 text-left font-sans text-xs normal-case select-text block cursor-default"
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+        >
+          <span className="flex items-center justify-between gap-2 pb-2 border-b border-border">
+            <span className="flex items-center gap-1.5 min-w-0 flex-1 font-mono text-2xs text-text-dim truncate">
+              <FileText className="w-3 h-3 text-accent flex-shrink-0" />
+              <span className="truncate font-semibold text-text">{filename}</span>
+              {src.source?.chunk_index != null && (
+                <span className="text-text-muted flex-shrink-0">
+                  · #{src.source.chunk_index + 1}
+                </span>
+              )}
+            </span>
+            {pct != null && (
+              <span className="font-mono text-3xs px-1.5 py-0.5 rounded bg-accent-soft text-accent border border-accent/20 flex-shrink-0">
+                {pct}% match
+              </span>
+            )}
+          </span>
+
+          {src.content && (
+            <span className="mt-2 text-2xs text-text-dim leading-relaxed line-clamp-4 bg-panel p-2 rounded-lg border border-border/60 font-serif block italic">
+              "{src.content.trim()}"
+            </span>
+          )}
+
+          <span className="mt-2.5 pt-2 border-t border-border flex items-center justify-between font-mono text-3xs text-text-muted">
+            <span>Grounding [{index}]</span>
+            <a
+              href={docUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-accent hover:underline font-sans text-2xs font-medium"
+            >
+              Open source <ExternalLink className="w-2.5 h-2.5" />
+            </a>
+          </span>
+        </span>
+      )}
+    </span>
+  );
+}
+
 /* ── Markdown with [n] rendered as citation chips ──── */
 function AnswerMarkdown({ text, sources }) {
   const { notebookId } = useParams();
@@ -400,19 +508,7 @@ function AnswerMarkdown({ text, sources }) {
           if (href?.startsWith('#cite-')) {
             const n = parseInt(href.slice(6), 10);
             const src = sources?.[n - 1];
-            if (!src) return <span>[{children}]</span>;
-            return (
-              <a
-                className="citation-chip"
-                style={{ textDecoration: 'none' }}
-                href={getDocumentViewUrl(notebookId, src.id)}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={src.source?.filename || `chunk #${src.id}`}
-              >
-                {children}
-              </a>
-            );
+            return <CitationChip index={n} src={src} notebookId={notebookId} />;
           }
           return (
             <a href={href} target="_blank" rel="noopener noreferrer">
@@ -635,15 +731,30 @@ export default function ChatPanel({
   // the old notebook's messages to the new key (see report for the full
   // switch sequence).
   const chatKeyRef = useRef(null);
-  // Skips the persist effect run that fires immediately after a load, so the
-  // still-stale `messages` from the previous render (or the initial `[]` on
-  // mount) never gets written over the thread the load effect just set.
   const skipPersistRef = useRef(true);
-  // Monotonic token invalidating in-flight ask/search/research requests when
-  // the notebook changes mid-stream, so a stale response can never mutate or
-  // persist another notebook's thread.
   const reqSeqRef = useRef(0);
   const baseInputRef = useRef('');
+
+  const scrollContainerRef = useRef(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [hasNewTokens, setHasNewTokens] = useState(false);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const threshold = 90;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+    setIsAtBottom(atBottom);
+    if (atBottom) {
+      setHasNewTokens(false);
+    }
+  }, []);
+
+  const scrollToBottom = useCallback((behavior = 'smooth') => {
+    endRef.current?.scrollIntoView({ behavior });
+    setIsAtBottom(true);
+    setHasNewTokens(false);
+  }, []);
 
   // Load (or swap) this notebook's chat thread whenever notebookId changes,
   // including on mount.
@@ -684,8 +795,12 @@ export default function ChatPanel({
   }, [messages]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (isAtBottom) {
+      scrollToBottom('smooth');
+    } else {
+      setHasNewTokens(true);
+    }
+  }, [messages, isAtBottom, scrollToBottom]);
 
   useEffect(() => {
     if (!notebookId || totalSources === 0) {
@@ -914,7 +1029,11 @@ export default function ChatPanel({
           />
         </div>
       )}
-      <div className="flex-1 overflow-y-auto px-6 pt-8 pb-4">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto px-6 pt-8 pb-4"
+      >
         <div className="max-w-3xl mx-auto flex flex-col gap-6 min-h-full">
           {messages.length === 0 && (
             <div className="flex-1 flex items-center justify-center py-16">
@@ -1068,6 +1187,21 @@ export default function ChatPanel({
           <div ref={endRef} />
         </div>
       </div>
+
+      {/* Floating Scroll-to-Bottom Sentinel */}
+      {!isAtBottom && (
+        <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-20 pointer-events-auto">
+          <button
+            type="button"
+            onClick={() => scrollToBottom('smooth')}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-2/95 backdrop-blur-md border border-border-bright shadow-2xl hover:border-accent hover:text-accent text-xs font-mono text-text transition-all duration-150 active:scale-95"
+            title="Scroll to latest message"
+          >
+            <ArrowDown className="w-3.5 h-3.5 text-accent animate-bounce" />
+            <span>{hasNewTokens ? 'New tokens below' : 'Scroll to bottom'}</span>
+          </button>
+        </div>
+      )}
 
       {/* Ask bar */}
       <div className="flex-shrink-0 px-6 pb-6 pt-2 bg-gradient-to-t from-carbon via-carbon to-transparent">

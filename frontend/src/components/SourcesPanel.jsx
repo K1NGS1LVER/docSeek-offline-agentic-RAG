@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { FileText, Plus, Trash2, Loader2, FolderOpen, RotateCcw, Search, Globe, ExternalLink, ChevronDown, ChevronRight, RefreshCw, Save, Copy, Check, X } from 'lucide-react';
+import { FileText, Plus, Trash2, Loader2, FolderOpen, RotateCcw, Search, Globe, ExternalLink, ChevronDown, ChevronRight, RefreshCw, Save, Copy, Check, X, PanelLeftClose } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { deleteSource, getDocumentViewUrl, searchWeb, importWebResults, deepWebResearch, saveResearchReport } from '../lib/api';
 import { useSystem } from '../lib/SystemContext';
@@ -42,11 +42,19 @@ function SourceRow({ source, checked, onToggle, onDeleted, onOpenPdf }) {
 
   const isPdf = (source.filename || '').toLowerCase().endsWith('.pdf');
   const Icon = source.github_repo ? GithubMark : FileText;
+  const ext = source.github_repo
+    ? 'GIT'
+    : (source.filename || '').includes('.')
+    ? (source.filename.split('.').pop() || '').toUpperCase().slice(0, 4)
+    : 'DOC';
 
   return (
-    <div className="group flex items-center gap-3 h-10 px-4 rounded-lg hover:bg-surface-2 transition-colors">
+    <div className="group flex items-center gap-2.5 h-10 px-3 rounded-lg hover:bg-surface-2 transition-colors">
       <Checkbox checked={checked} onChange={onToggle} title="Include in retrieval" />
       <Icon className="w-3.5 h-3.5 text-accent flex-shrink-0" />
+      <span className="font-mono text-[9px] leading-none px-1 py-0.5 rounded bg-surface-2/40 border border-border/40 text-text-dim/60 flex-shrink-0">
+        {ext}
+      </span>
       {isPdf ? (
         <button
           onClick={() => onOpenPdf?.(source.filename)}
@@ -66,9 +74,6 @@ function SourceRow({ source, checked, onToggle, onDeleted, onOpenPdf }) {
           {source.filename}
         </a>
       )}
-      <span className="font-mono text-2xs text-text-muted group-hover:hidden">
-        {source.chunks}
-      </span>
       <button
         onClick={handleDelete}
         title={confirming ? 'Click again to delete' : 'Delete source'}
@@ -556,14 +561,19 @@ function WebResearchSection({ onViewSources }) {
   );
 }
 
-export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpen, onOpenPdf }) {
+export default function SourcesPanel({ unchecked, setUnchecked, onAdd, onClose, dialogOpen, onOpenPdf }) {
   const { sources, ingestStatus, uploads, retryUpload, dismissUpload, researchState } = useSystem();
   const [tab, setTab] = useState('sources');
+  const [filterQuery, setFilterQuery] = useState('');
 
   const allChecked = unchecked.size === 0;
   const totalChunks = sources.reduce((acc, s) => acc + (s.chunks || 0), 0);
   const pending = dialogOpen ? [] : uploads.filter((u) => u.status !== 'done');
   const resultsCount = researchState?.results?.length || 0;
+
+  const visibleSources = filterQuery.trim()
+    ? sources.filter((s) => (s.filename || '').toLowerCase().includes(filterQuery.toLowerCase().trim()))
+    : sources;
 
   const toggleAll = () => {
     setUnchecked(allChecked ? new Set(sources.map((s) => s.source_file)) : new Set());
@@ -601,15 +611,91 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpe
             Add
           </Button>
         )}
+        {onClose && (
+          <IconButton
+            icon={PanelLeftClose}
+            onClick={onClose}
+            title="Collapse sources ([)"
+            size="sm"
+          />
+        )}
       </div>
 
       {tab === 'sources' ? (
         <>
           {sources.length > 0 && (
-            <label className="flex-shrink-0 flex items-center gap-3 px-6 py-2.5 text-sm text-text-muted border-b border-border cursor-pointer hover:bg-surface-2 transition-colors">
-              <Checkbox checked={allChecked} onChange={toggleAll} />
-              <span>Select all sources</span>
-            </label>
+            <>
+              {/* Search & Filter Bar */}
+              <div className="px-3 py-2 border-b border-border bg-surface-2/30 flex-shrink-0">
+                <div className="relative flex items-center">
+                  <Search className="w-3.5 h-3.5 absolute left-2.5 text-text-muted pointer-events-none" />
+                  <input
+                    type="text"
+                    value={filterQuery}
+                    onChange={(e) => setFilterQuery(e.target.value)}
+                    placeholder="Filter sources…"
+                    className="w-full h-8 pl-8 pr-7 bg-carbon border border-border rounded-lg text-xs text-text placeholder:text-text-muted focus:outline-none focus:border-accent transition-colors"
+                  />
+                  {filterQuery && (
+                    <button
+                      onClick={() => setFilterQuery('')}
+                      className="absolute right-2 text-text-muted hover:text-text cursor-pointer"
+                      title="Clear filter"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Selection Shortcuts Header */}
+              <div className="flex-shrink-0 flex items-center justify-between px-4 py-2 text-xs text-text-muted border-b border-border bg-surface">
+                <label className="flex items-center gap-2 cursor-pointer hover:text-text transition-colors">
+                  <Checkbox checked={allChecked} onChange={toggleAll} />
+                  <span>Select all</span>
+                </label>
+                <div className="flex items-center gap-1 font-mono text-3xs">
+                  <button
+                    onClick={() => {
+                      const pdfs = sources
+                        .filter((s) => (s.filename || '').toLowerCase().endsWith('.pdf'))
+                        .map((s) => s.source_file);
+                      setUnchecked(
+                        new Set(sources.filter((s) => !pdfs.includes(s.source_file)).map((s) => s.source_file))
+                      );
+                    }}
+                    className="px-1.5 py-0.5 rounded hover:bg-surface-2 hover:text-accent transition-colors cursor-pointer"
+                    title="Select only PDF documents"
+                  >
+                    PDFs
+                  </button>
+                  <span>·</span>
+                  <button
+                    onClick={() => {
+                      setUnchecked((prev) => {
+                        const next = new Set();
+                        sources.forEach((s) => {
+                          if (!prev.has(s.source_file)) next.add(s.source_file);
+                        });
+                        return next;
+                      });
+                    }}
+                    className="px-1.5 py-0.5 rounded hover:bg-surface-2 hover:text-accent transition-colors cursor-pointer"
+                    title="Invert selection"
+                  >
+                    Invert
+                  </button>
+                  <span>·</span>
+                  <button
+                    onClick={() => setUnchecked(new Set(sources.map((s) => s.source_file)))}
+                    className="px-1.5 py-0.5 rounded hover:bg-surface-2 hover:text-caution transition-colors cursor-pointer"
+                    title="Deselect all sources"
+                  >
+                    None
+                  </button>
+                </div>
+              </div>
+            </>
           )}
 
           <div className="flex-1 overflow-y-auto min-h-0 p-2 space-y-1">
@@ -633,6 +719,15 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpe
                   </Button>
                 </div>
               </div>
+            ) : visibleSources.length === 0 && sources.length > 0 ? (
+              <div className="p-6 text-center text-text-dim text-xs">
+                No sources matching "{filterQuery}"
+                <div className="mt-2">
+                  <Button variant="ghost" size="sm" onClick={() => setFilterQuery('')}>
+                    Clear filter
+                  </Button>
+                </div>
+              </div>
             ) : (
               <>
                 {pending.map((item) => (
@@ -643,7 +738,7 @@ export default function SourcesPanel({ unchecked, setUnchecked, onAdd, dialogOpe
                     onDismiss={dismissUpload}
                   />
                 ))}
-                {sources.map((s) => (
+                {visibleSources.map((s) => (
                   <SourceRow
                     key={s.source_file}
                     source={s}
