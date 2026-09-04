@@ -440,7 +440,7 @@ function SourcesRow({ sources }) {
           target="_blank"
           rel="noopener noreferrer"
           title={s.content?.slice(0, 300)}
-          className="inline-flex items-center gap-1.5 h-7 px-3 bg-panel border border-border rounded-full font-mono text-xs text-text-dim hover:border-accent hover:text-accent transition-colors"
+          className="inline-flex items-center gap-1.5 h-7 px-3 bg-panel border border-border rounded-md font-mono text-xs text-text-dim hover:border-accent hover:text-accent transition-colors"
         >
           <b className="text-accent font-semibold">{i + 1}</b>
           {s.source?.filename || `chunk #${s.id}`}

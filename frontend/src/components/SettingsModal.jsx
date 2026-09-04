@@ -67,7 +67,7 @@ function DebugConsole({ addLog }) {
           <button
             key={i}
             onClick={() => select(i)}
-            className={`font-mono text-xs h-7 px-3 rounded-full border transition-colors ${
+            className={`font-mono text-xs h-7 px-3 rounded-md border transition-colors ${
               selected === i
                 ? 'border-accent text-accent bg-accent-soft'
                 : 'border-border text-text-muted hover:text-text-dim hover:border-border-bright'
