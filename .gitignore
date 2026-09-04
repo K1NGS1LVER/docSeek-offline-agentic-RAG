@@ -18,6 +18,8 @@ docs/*
 *.faiss
 *.log
 *.sqlite
+*.sqlite3
+*.bin
 
 # OS specific
 .DS_Store
@@ -26,10 +28,17 @@ docs/*
 # Local planning notes
 improvement.md
 button.md
+review.md
 
 # Local agent instructions (not published)
 CLAUDE.md
 .claude/
+.agents/
+.bob/
+.continue/
+.qwen/
+agent/
+skills-lock.json
 
 # SearXNG runtime data (settings.yml is tracked)
 searxng/*.db
@@ -37,3 +46,4 @@ searxng/uwsgi.ini
 
 # Local AI-harness plugin output (not published)
 docs/superpowers/
+
