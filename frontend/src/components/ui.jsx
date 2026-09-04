@@ -3,9 +3,11 @@
  *
  * Every color/font/size/radius resolves to theme.css tokens (mapped to
  * utilities in tailwind.css). The fixed design language:
- *   cards/panels/modals  → rounded-xl / rounded-2xl
- *   buttons/inputs       → rounded-lg, FIXED heights (sm 32 / md 40 / lg 48)
- *   chips/toggles        → pill (rounded-full), 28px
+ *   cards / panels       → rounded-xl (12px)
+ *   modals               → rounded-2xl (16px)
+ *   buttons / inputs     → rounded-lg (8px), FIXED heights
+ *   chips / toggles      → rounded-md (6px)
+ *   indicators / dots    → rounded-full
  *   disabled state       → disabled/disabled-fg tokens, never opacity hacks
  *   spacing              → 8pt grid (gap/p in 2/4/6/8 steps)
  */
@@ -84,17 +86,17 @@ export function IconButton({ icon: Icon, size = 'sm', danger = false, className 
   );
 }
 
-/** Pill toggle between a few options. options: [{ value, label }].
+/** Segmented toggle between a few options. options: [{ value, label }].
     `block` stretches it to the container width (tab-style). */
 export function Segmented({ options, value, onChange, mono = false, block = false }) {
   return (
-    <div className={`${block ? 'flex w-full' : 'inline-flex'} bg-panel border border-border rounded-full p-1 gap-0.5`}>
+    <div className={`${block ? 'flex w-full' : 'inline-flex'} bg-panel border border-border rounded-lg p-1 gap-0.5`}>
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
           onClick={() => onChange(o.value)}
-          className={`h-6 px-3 rounded-full text-xs font-medium transition-all ${
+          className={`h-6 px-3 rounded-md text-xs font-medium transition-all ${
             block ? 'flex-1' : ''
           } ${mono ? 'font-mono uppercase' : ''} ${
             value === o.value
@@ -109,13 +111,13 @@ export function Segmented({ options, value, onChange, mono = false, block = fals
   );
 }
 
-/** Pill chip — suggested questions, source citations, filters. */
+/** Chip — suggested questions, source citations, filters. */
 export function Chip({ icon: Icon, active = false, mono = false, children, className = '', ...props }) {
   return (
     <button
       type="button"
       {...props}
-      className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full border transition-all active:scale-[0.96]
+      className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-md border transition-all active:scale-[0.96]
         ${mono ? 'font-mono text-xs' : 'text-sm'}
         ${
           active
