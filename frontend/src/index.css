@@ -340,7 +340,7 @@ select {
   padding: 0 16px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-2);
@@ -353,7 +353,7 @@ select {
   padding: 0 16px;
   background: var(--surface);
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-chip);
+  border-radius: var(--radius-md);
   font-family: var(--font-sans);
   font-size: var(--fs-sm);
   color: var(--text-2);
@@ -371,14 +371,12 @@ select {
   transform: scale(0.98);
 }
 
-.demo-chip.demo-chip-active,
 .demo-chip-active {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--on-accent);
 }
 
-.demo-chip.demo-chip-active:hover,
 .demo-chip-active:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);

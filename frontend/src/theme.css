@@ -83,12 +83,6 @@
   --radius-2xl: 16px;
   --radius-full: 9999px;
 
-  /* Semantic control radius aliases */
-  --radius-btn: var(--radius-lg);       /* 8px */
-  --radius-chip: var(--radius-md);      /* 6px */
-  --radius-surface: var(--radius-xl);   /* 12px */
-  --radius-modal: var(--radius-2xl);    /* 16px */
-
   /* ── Type scale (px, fixed) ────────────────────────────────── */
   --fs-2xs: 10px;   /* mono micro-labels, eyebrows */
   --fs-xs: 11px;    /* mono labels, captions */

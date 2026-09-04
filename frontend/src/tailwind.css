@@ -24,10 +24,6 @@
   --radius-xl: var(--radius-xl);
   --radius-2xl: var(--radius-2xl);
   --radius-full: var(--radius-full);
-  --radius-btn: var(--radius-btn);
-  --radius-chip: var(--radius-chip);
-  --radius-surface: var(--radius-surface);
-  --radius-modal: var(--radius-modal);
 
   /* Fixed px type scale (text-2xs … text-4xl) */
   --text-2xs: var(--fs-2xs);
