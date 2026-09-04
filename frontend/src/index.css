@@ -140,7 +140,7 @@ select {
 
 ::-webkit-scrollbar-thumb {
   background: var(--border-2);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -327,6 +327,105 @@ select {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* ============================================================
+   LANDING COMPONENTS (StatChip, DemoChip, Terminal)
+   ============================================================ */
+.stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--control-sm);
+  padding: 0 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.demo-chip {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-sm);
+  padding: 0 16px;
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-chip);
+  font-family: var(--font-sans);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+
+.demo-chip:hover {
+  border-color: var(--accent);
+  color: var(--text-1);
+}
+
+.demo-chip:active {
+  transform: scale(0.98);
+}
+
+.demo-chip.demo-chip-active,
+.demo-chip-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.demo-chip.demo-chip-active:hover,
+.demo-chip-active:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--on-accent);
+}
+
+.terminal-window {
+  background: var(--terminal-bg);
+  border: 1px solid var(--terminal-border);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  text-align: left;
+  box-shadow: 0 32px 90px rgba(28, 25, 20, 0.35);
+  width: 100%;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 11px 15px;
+  background: var(--terminal-header);
+  border-bottom: 1px solid var(--terminal-border-inner);
+}
+
+.terminal-title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--terminal-dim);
+  margin-left: 8px;
+}
+
+.terminal-body {
+  padding: 18px 22px;
+  min-height: 232px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.85;
+}
+
+.terminal-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  background: var(--terminal-ans);
+  vertical-align: -2px;
+  animation: statusPulse 1s ease infinite;
 }
 
 /* ============================================================

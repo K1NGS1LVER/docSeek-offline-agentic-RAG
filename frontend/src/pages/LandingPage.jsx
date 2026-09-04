@@ -48,11 +48,11 @@ const DEMOS = [
 ]
 
 const TERM_COLORS = {
-    cmd: 'rgba(255,255,255,0.85)',
-    plan: '#d97706',
-    dim: 'rgba(255,255,255,0.42)',
+    cmd: 'var(--terminal-cmd)',
+    plan: 'var(--accent)',
+    dim: 'var(--terminal-dim)',
     ok: '#4ade80',
-    ans: 'rgba(255,255,255,0.68)',
+    ans: 'var(--terminal-ans)',
 }
 
 /* ── Looping, clickable agentic-ask terminal ─────────────────────── */
@@ -104,33 +104,20 @@ function Terminal({ demoIdx, onCycle }) {
     }, [demoIdx, onCycle])
 
     return (
-        <div style={{
-            background: '#161513', border: '1px solid rgba(255,255,255,0.10)',
-            borderRadius: 'var(--radius-xl)', overflow: 'hidden', textAlign: 'left',
-            boxShadow: '0 32px 90px rgba(28,25,20,0.35)', width: '100%',
-        }}>
-            <div style={{
-                display: 'flex', alignItems: 'center', gap: 7, padding: '11px 15px',
-                background: '#1d1b18', borderBottom: '1px solid rgba(255,255,255,0.07)',
-            }}>
+        <div className="terminal-window">
+            <div className="terminal-header">
                 {['#ff5f57', '#febc2e', '#28c840'].map((c) => (
                     <span key={c} style={{ width: 10, height: 10, borderRadius: '50%', background: c }} />
                 ))}
-                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'rgba(255,255,255,0.35)', marginLeft: 8 }}>
+                <span className="terminal-title">
                     docseek — agentic ask
                 </span>
             </div>
-            <div style={{
-                padding: '18px 22px', minHeight: 232,
-                fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.85,
-            }}>
+            <div className="terminal-body">
                 {lines.map((l, i) => l && (
                     <div key={i} style={{ color: TERM_COLORS[l.cls], whiteSpace: 'pre-wrap' }}>{l.text}</div>
                 ))}
-                <span style={{
-                    display: 'inline-block', width: 7, height: 13, background: 'rgba(255,255,255,0.6)',
-                    verticalAlign: -2, animation: 'statusPulse 1s ease infinite',
-                }} />
+                <span className="terminal-cursor" />
             </div>
         </div>
     )
@@ -228,11 +215,7 @@ function Constellation() {
 /* ── Small pieces ────────────────────────────────────────────────── */
 function StatChip({ children }) {
     return (
-        <span style={{
-            background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 999,
-            height: 32, padding: '0 16px', fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-xs)',
-            color: 'var(--text-2)', display: 'inline-flex', alignItems: 'center', gap: 8,
-        }}>
+        <span className="stat-chip">
             {children}
         </span>
     )
@@ -329,15 +312,9 @@ export default function LandingPage({ theme, setTheme }) {
                         {DEMOS.map((d, i) => (
                             <button
                                 key={i}
+                                type="button"
                                 onClick={() => setDemoIdx(i)}
-                                style={{
-                                    background: i === demoIdx ? 'var(--accent)' : 'var(--surface)',
-                                    border: `1px solid ${i === demoIdx ? 'var(--accent)' : 'var(--border-2)'}`,
-                                    color: i === demoIdx ? 'var(--on-accent)' : 'var(--text-2)',
-                                    borderRadius: 999, height: 32, padding: '0 16px', fontSize: 'var(--fs-sm)',
-                                    fontFamily: 'var(--font-sans)', cursor: 'pointer',
-                                    transition: 'all var(--transition)',
-                                }}
+                                className={`demo-chip ${i === demoIdx ? 'demo-chip-active' : ''}`}
                             >
                                 {d.q.charAt(0).toUpperCase() + d.q.slice(1)}
                             </button>
