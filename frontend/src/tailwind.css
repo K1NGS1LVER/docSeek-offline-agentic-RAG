@@ -17,11 +17,17 @@
   --font-display: var(--font-serif);
   --font-mono: var(--font-mono);
 
+  --radius-xs: var(--radius-xs);
   --radius-sm: var(--radius-sm);
   --radius-md: var(--radius-md);
   --radius-lg: var(--radius-lg);
   --radius-xl: var(--radius-xl);
   --radius-2xl: var(--radius-2xl);
+  --radius-full: var(--radius-full);
+  --radius-btn: var(--radius-btn);
+  --radius-chip: var(--radius-chip);
+  --radius-surface: var(--radius-surface);
+  --radius-modal: var(--radius-modal);
 
   /* Fixed px type scale (text-2xs … text-4xl) */
   --text-2xs: var(--fs-2xs);
@@ -65,6 +71,15 @@
   --color-text-muted: var(--text-3);
   --color-disabled: var(--disabled-bg);
   --color-disabled-fg: var(--disabled-fg);
+
+  /* Terminal colors */
+  --color-terminal-bg: var(--terminal-bg);
+  --color-terminal-header: var(--terminal-header);
+  --color-terminal-border: var(--terminal-border);
+  --color-terminal-border-inner: var(--terminal-border-inner);
+  --color-terminal-dim: var(--terminal-dim);
+  --color-terminal-cmd: var(--terminal-cmd);
+  --color-terminal-ans: var(--terminal-ans);
 }
 
 /* Status indicator pulse */
