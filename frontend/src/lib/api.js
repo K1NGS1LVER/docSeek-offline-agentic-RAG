@@ -334,11 +334,11 @@ export async function search(notebookId, query, k = 5, rerank = false, sourceFil
  * @param {string} query - The user's question
  * @param {number|null} k - Number of chunks to retrieve (null = agent decides)
  * @param {function} onChunk - Called with the accumulated answer text
- * @param {object} [handlers] - Optional { onTrace(event), onSources(list), onFollowups(list), agentic, sourceFiles, history }
+ * @param {object} [handlers] - Optional { onTrace(event), onSources(list), onFollowups(list), agentic, sourceFiles, history, onCreate }
  * @returns {Promise<{data: string, latency: number}>}
  */
 export async function ask(notebookId, query, k = null, onChunk, handlers = {}) {
-  const { onTrace, onSources, onFollowups, agentic = null, sourceFiles = null, history = null } = handlers;
+  const { onTrace, onSources, onFollowups, agentic = null, sourceFiles = null, history = null, onCreate = null } = handlers;
   return streamTypedSSE({
     url: `${BASE}/ask`,
     body: { query, k, agentic, source_files: sourceFiles, notebook_id: notebookId, history },
@@ -346,6 +346,7 @@ export async function ask(notebookId, query, k = null, onChunk, handlers = {}) {
     onTrace,
     onSources,
     onFollowups,
+    onCreate,
   });
 }
 
@@ -378,7 +379,7 @@ export async function research(notebookId, query, onChunk, handlers = {}) {
  * events (JSON-encoded text deltas) into the answer text; typed events never
  * leak into the text.
  */
-async function streamTypedSSE({ url, body, onChunk, onTrace, onSources, onFollowups }) {
+async function streamTypedSSE({ url, body, onChunk, onTrace, onSources, onFollowups, onCreate }) {
   const start = performance.now();
 
   const res = await fetch(url, {
@@ -425,6 +426,8 @@ async function streamTypedSSE({ url, body, onChunk, onTrace, onSources, onFollow
         const followups = Array.isArray(parsed) ? parsed : JSON.parse(rawData);
         if (onFollowups) onFollowups(followups);
       } catch { /* skip malformed */ }
+    } else if (name === 'results' && typeof parsed === 'object' && onCreate) {
+      onCreate(parsed);
     } else if (typeof parsed === 'string') {
       // Unnamed events carry JSON-encoded answer text deltas; anything else
       // is a typed payload that must never leak into the answer text.

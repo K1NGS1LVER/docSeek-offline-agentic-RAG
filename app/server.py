@@ -5,7 +5,7 @@ import logging
 import json
 import subprocess
 import threading
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, File, Form, UploadFile, Header, Depends, WebSocket, WebSocketDisconnect
@@ -821,6 +821,11 @@ class AskRequest(BaseModel):
     source_files: Optional[List[str]] = None
     # Compact prior conversation for follow-ups: alternating user/assistant strings.
     history: Optional[List[str]] = None
+    # When the agent decides a different response shape is more useful, it picks
+    # one of: answer | research | artifact. answer is the default today.
+    mode: Optional[str] = None
+    # Used only when mode == "artifact": which artifact type to produce.
+    artifact_type: Optional[str] = None
     notebook_id: str
 
 
@@ -866,16 +871,20 @@ async def ask(request: AskRequest):
             def retrieve(query: str, k: int) -> List[Dict[str, Any]]:
                 return _retrieve_and_filter(rt, query, k, request.source_files)
 
+            chosen_mode = "answer"
+            chosen_artifact_type = None
             if use_agent:
                 agent = RetrievalAgent(llm=llm, retrieve_fn=retrieve)
-                results = []
+                agent_results = []
                 async for ev in agent.run(request.query, user_k=request.k):
                     if ev["type"] == "trace":
                         yield {"event": "trace", "data": json.dumps(ev)}
                     elif ev["type"] == "results":
-                        results = ev["results"]
+                        agent_results = ev["results"]
+                        chosen_mode = ev.get("response_mode", "answer")
+                        chosen_artifact_type = ev.get("artifact_type")
             else:
-                results = await run_in_threadpool(retrieve, request.query, request.k or 3)
+                agent_results = await run_in_threadpool(retrieve, request.query, request.k or 3)
 
             search_results = [
                 {
@@ -885,7 +894,7 @@ async def ask(request: AskRequest):
                     "rerank_score": r.get("rerank_score"),
                     "source": r["source"],
                 }
-                for r in results
+                for r in agent_results
             ]
             yield {"event": "sources", "data": json.dumps(search_results)}
 
@@ -898,16 +907,26 @@ async def ask(request: AskRequest):
             # Reordered context: best chunks at the start and end of the prompt.
             context = llm.build_context(search_results)
             logger.info(
-                f"ASK '{request.query}' agentic={use_agent} → "
+                f"ASK '{request.query}' agentic={use_agent} mode={chosen_mode} → "
                 f"{len(search_results)} chunks"
                 + (f", {len(request.history or [])} prior turns" if history_block else "")
                 + "..."
             )
 
             full_answer = ""
-            async for chunk in llm.stream_answer(request.query, context, history_block):
-                full_answer += chunk
-                yield {"data": json.dumps(chunk)}
+            if chosen_mode == "research":
+                async for chunk in _stream_research_alt(request.query, context, history_block):
+                    full_answer += chunk
+                    yield {"data": json.dumps(chunk)}
+            elif chosen_mode == "artifact":
+                artifact_type = chosen_artifact_type or request.artifact_type or "briefing"
+                async for chunk in _stream_artifact_alt(request.query, context, history_block, artifact_type):
+                    full_answer += chunk
+                    yield {"data": json.dumps(chunk)}
+            else:
+                async for chunk in llm.stream_answer(request.query, context, history_block):
+                    full_answer += chunk
+                    yield {"data": json.dumps(chunk)}
 
             # Generate follow-up suggestions (non-blocking to answer delivery)
             try:
@@ -930,6 +949,92 @@ async def ask(request: AskRequest):
             yield {"data": json.dumps(get_friendly_error(e))}
 
     return EventSourceResponse(event_stream())
+
+
+async def _stream_research_alt(
+    query: str, context: str, history_block: str, max_tokens: int = 1500
+) -> AsyncIterator[str]:
+    """Lightweight research-style response when the agent chooses mode=research.
+
+    Uses the same retrieved context the short /ask path already built, plus
+    optional compact history for follow-ups, and streams a single multi-paragraph
+    cited answer framed as a short research note rather than a full sectioned
+    report. This avoids re-implementing the full ResearchGraph inside /ask while
+    still giving the user the longer, more considered shape the agent picked.
+    """
+    history_section = ""
+    if history_block:
+        history_section = f"\n\n<conversation_history>\n{history_block}\n</conversation_history>"
+
+    user_message = (
+        f"""<context>
+{context}
+</context>
+<user_query>
+{query}
+</user_query>{history_section}"""
+    )
+
+    system = (
+        "You are a local research assistant writing a concise multi-paragraph research note "
+        "grounded strictly in the numbered context below and the conversation history when relevant. "
+        "Write 3 to 6 short paragraphs that actually answer the question, not a generic intro. "
+        "Cite evidence inline with the document's bracketed number right after the statement it supports, "
+        "like: \"Embeddings are L2-normalized [2].\" "
+        "If neither the context nor the conversation history contains enough information, say so clearly. "
+        "Write in Markdown. Do not repeat the context format, document headers, or these instructions."
+    )
+
+    try:
+        async for chunk in llm.stream_complete(system, user_message):
+            yield chunk
+    except Exception as e:
+        logger.error(f"ASK research-mode stream failed: {e}")
+        yield f"\n\n⚠️ Research-style answer failed: {str(e)}\n"
+
+
+async def _stream_artifact_alt(
+    query: str, context: str, history_block: str, artifact_type: str, max_tokens: int = 1800
+) -> AsyncIterator[str]:
+    """Lightweight artifact-style response when the agent chooses mode=artifact.
+
+    Mirrors the structure of POST /artifacts/generate (retrieve best chunks once,
+    build context, stream a structured artifact) but reuses the context already
+    retrieved for this /ask turn instead of re-embedding and re-searching.
+    """
+    history_section = ""
+    if history_block:
+        history_section = f"\n\n<conversation_history>\n{history_block}\n</conversation_history>"
+
+    prompt_config = ARTIFACT_PROMPTS.get(artifact_type)
+    if prompt_config is None:
+        yield f"\n\n⚠️ Unknown artifact type: {artifact_type}\n"
+        return
+
+    system_prompt = prompt_config["system"]
+    if history_block:
+        system_prompt += (
+            "\n\nYou may also use the conversation history below to keep this artifact "
+            "consistent with the user's earlier questions and answers, but still ground "
+            "every factual claim in the numbered context below."
+        )
+
+    user_prompt = (
+        f"""<context>
+{context}
+</context>
+<user_query>
+{query}
+</user_query>{history_section}
+\n\nGenerate the {prompt_config['title']} that answers the user's question as directly as possible."""
+    )
+
+    try:
+        async for chunk in llm.stream_complete(system_prompt, user_prompt):
+            yield chunk
+    except Exception as e:
+        logger.error(f"ASK artifact-mode stream failed: {e}")
+        yield f"\n\n⚠️ Artifact generation failed: {str(e)}\n"
 
 
 # ============================================================================
@@ -1025,6 +1130,24 @@ ARTIFACT_PROMPTS = {
                   "developments, or steps described in the provided sources. Use a clear date/sequence format. "
                   "If exact dates aren't available, use relative ordering. Cite sources with [n] notation.",
         "title": "Timeline",
+    },
+}
+
+# Responses the agent may choose when it decides a plain short answer is not the
+# best fit for the user's query. Kept in config so the frontend can render the
+# same labels and the backend can validate choices in one place.
+AGENT_RESPONSE_MODES = {
+    "answer": {
+        "label": "Answer",
+        "description": "Short grounded answer with citations.",
+    },
+    "research": {
+        "label": "Research",
+        "description": "Longer multi-section cited report.",
+    },
+    "artifact": {
+        "label": "Artifact",
+        "description": "Structured artifact (briefing / study guide / FAQ / timeline).",
     },
 }
 

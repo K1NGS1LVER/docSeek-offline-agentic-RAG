@@ -924,6 +924,8 @@ export default function ChatPanel({
           return [m.text];
         });
 
+      let chosenMode = 'answer';
+
       const { data, latency } = await ask(
         notebookId,
         query,
@@ -938,11 +940,17 @@ export default function ChatPanel({
           },
           onSources: (sources) => updateLast(() => ({ sources })),
           onFollowups: (followups) => updateLast(() => ({ followups })),
+          onCreate: (ev) => {
+            if (ev && ev.type === 'results' && ev.response_mode) {
+              chosenMode = ev.response_mode;
+            }
+          },
         }
       );
 
-      updateLast(() => ({ text: data, isStreaming: false, latency }));
-      addLog(`Answered in ${latency}ms`);
+      const answerMode = chosenMode ?? 'answer';
+      updateLast(() => ({ text: data, isStreaming: false, latency, mode: answerMode }));
+      addLog(`Answered in ${latency}ms (mode=${answerMode})`);
     } catch (err) {
       if (reqSeqRef.current === myReq) {
         setMessages((prev) => [
@@ -1000,13 +1008,13 @@ export default function ChatPanel({
         (chunk) => updateLast(() => ({ text: chunk, isStreaming: true })),
         {
           sourceFiles: sourceFilter,
-          history: history.length > 0 ? history : null,
           onTrace: (ev) => {
             addLog(`Research [${ev.stage}] ${ev.message}`);
             updateLast((msg) => ({ trace: [...(msg.trace || []), ev] }));
           },
           onSources: (sources) => updateLast(() => ({ sources })),
           onFollowups: (followups) => updateLast(() => ({ followups })),
+          history: history.length > 0 ? history : null,
         }
       );
       updateLast(() => ({ text: data, isStreaming: false, latency }));
@@ -1165,6 +1173,15 @@ export default function ChatPanel({
                               {q}
                             </Chip>
                           ))}
+                          {msg.mode && msg.mode !== 'answer' && (
+                            <Chip
+                              icon={Sparkles}
+                              title={`Response shape: ${msg.mode === 'research' ? 'research-style' : msg.mode === 'artifact' ? 'artifact-style' : msg.mode}`}
+                              className="ml-auto border-accent/30"
+                            >
+                              {msg.mode === 'research' ? 'research-style' : msg.mode === 'artifact' ? 'artifact-style' : msg.mode}
+                            </Chip>
+                          )}
                         </div>
                       </div>
                     )}

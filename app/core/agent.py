@@ -56,13 +56,16 @@ MAX_RERANK_CANDIDATES = 30
 MAX_SUBQUERIES = 3
 
 PLAN_SYSTEM = """You are the retrieval planner of a local document-search system.
-Given a user query, decide how to retrieve evidence. Respond with ONLY a JSON object:
+Given a user query, decide how to retrieve evidence AND which response shape best
+matches the user's intent. Respond with ONLY a JSON object:
 {
   "query_type": "keyword" | "factual" | "conceptual" | "multi_hop",
   "k": <int 3-12, how many chunks to retrieve; more for broad/complex queries>,
   "rewritten_query": <string or null; a clearer standalone search query, null if the original is already good>,
   "subqueries": <array of 2-3 simpler search queries if the question needs multiple distinct lookups, else null>,
   "rerank": <true if precise ranking matters (natural-language questions), false for simple keyword lookups>,
+  "response_mode": <"answer" | "research" | "artifact"; the response shape the user likely wants>,
+  "artifact_type": <"briefing" | "study_guide" | "faq" | "timeline" or null; only when response_mode is "artifact">,
   "reason": <one short sentence explaining your choices>
 }"""
 
@@ -126,6 +129,9 @@ class RetrievalAgent:
             "rewritten_query": None,
             "subqueries": None,
             "rerank": len(words) >= 3,
+            # Deterministic fallback for the response shape: a plain answer.
+            "response_mode": "answer",
+            "artifact_type": None,
             "reason": "Heuristic plan (local LLM unavailable or planning disabled).",
             "planner": "heuristic",
         }
@@ -151,6 +157,16 @@ class RetrievalAgent:
         if not isinstance(rewritten, str) or not rewritten.strip() or rewritten.strip() == query:
             rewritten = None
 
+        response_mode = raw.get("response_mode")
+        if response_mode not in ("answer", "research", "artifact"):
+            response_mode = fallback.get("response_mode", "answer")
+
+        artifact_type = raw.get("artifact_type")
+        if response_mode != "artifact" or not isinstance(artifact_type, str):
+            artifact_type = fallback.get("artifact_type", None)
+        elif artifact_type not in ("briefing", "study_guide", "faq", "timeline"):
+            artifact_type = fallback.get("artifact_type", None)
+
         return {
             "query_type": raw.get("query_type") if raw.get("query_type") in
                           ("keyword", "factual", "conceptual", "multi_hop") else fallback["query_type"],
@@ -159,6 +175,8 @@ class RetrievalAgent:
             "rewritten_query": rewritten,
             "subqueries": subqueries,
             "rerank": bool(raw.get("rerank", fallback["rerank"])),
+            "response_mode": response_mode,
+            "artifact_type": artifact_type,
             "reason": str(raw.get("reason", ""))[:300],
             "planner": "llm",
         }
@@ -255,6 +273,8 @@ class RetrievalAgent:
             "k": k,
             "use_rerank": use_rerank,
             "active_query": plan["rewritten_query"] or query,
+            "response_mode": plan.get("response_mode", "answer"),
+            "artifact_type": plan.get("artifact_type"),
             "best_by_id": {},
             "results": [],
             "grade": {},
@@ -408,4 +428,6 @@ class RetrievalAgent:
             "plan": final_state.get("plan", {}),
             "grade": final_state.get("grade", {}),
             "iterations": final_state.get("iteration", 0) + 1,
+            "response_mode": final_state.get("response_mode", "answer"),
+            "artifact_type": final_state.get("artifact_type"),
         }
