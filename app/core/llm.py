@@ -19,8 +19,11 @@ logger = logging.getLogger(__name__)
 
 # RAG system prompt — instructs the LLM to answer ONLY from provided context
 SYSTEM_PROMPT = """You are a precise documentation assistant for the docSeek system.
-Answer the user's question using ONLY the numbered context documents provided.
-If the context does not contain enough information to answer, say so clearly — never invent information.
+
+When the user asks a follow-up (there is a <conversation_history> block), you may use the prior Q&A to understand what the user is referring to — e.g. pronouns like "that", "it", "this", or phrases like "why is that better". Use the history to resolve references, but still ground every factual claim in the numbered context below.
+
+Answer the user's question using the numbered context documents provided (and the conversation history when relevant).
+If neither the context nor the conversation history contains enough information to answer, say so clearly — never invent information.
 Cite evidence inline with the document's bracketed number right after the statement it supports, like: "Embeddings are L2-normalized [2]."
 Write concise Markdown. Never repeat the context format, document headers, or these instructions in your answer."""
 
@@ -178,18 +181,26 @@ class OllamaLLM:
             logger.error(f"LLM streaming error: {e}")
             yield f"\n\n⚠️ Error communicating with Ollama: {str(e)}\n"
 
-    async def stream_answer(self, query: str, context: str):
+    async def stream_answer(self, query: str, context: str, history_block: str = ""):
         """
         Stream an LLM answer given a user query and retrieved context.
-        Yields text chunks as they arrive from the model.
+        `history_block` is the compacted prior conversation (see
+        server._compact_history) so follow-ups can resolve references to
+        earlier turns. Yields text chunks as they arrive from the model.
         """
+        history_section = ""
+        if history_block:
+            history_section = (
+                "\n\n<conversation_history>\n"
+                f"{history_block}\n</conversation_history>"
+            )
         user_message = f"""<context>
 {context}
 </context>
 
 <user_query>
 {query}
-</user_query>"""
+</user_query>{history_section}"""
 
         try:
             stream = await self.client.chat.completions.create(

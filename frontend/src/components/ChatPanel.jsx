@@ -914,6 +914,16 @@ export default function ChatPanel({
 
     try {
       const k = topK === 'auto' ? null : topK;
+      // Build compact prior-conversation history from the existing thread so
+      // follow-ups can resolve pronouns/references to the most recent Q&A.
+      const history = messages
+        .filter((m) => m.type === 'query' || (m.type === 'answer' && m.text))
+        .slice(-12)
+        .flatMap((m) => {
+          if (m.type === 'query') return [m.text];
+          return [m.text];
+        });
+
       const { data, latency } = await ask(
         notebookId,
         query,
@@ -921,6 +931,7 @@ export default function ChatPanel({
         (chunk) => updateLast(() => ({ text: chunk, isStreaming: true })),
         {
           sourceFiles: sourceFilter,
+          history: history.length > 0 ? history : null,
           onTrace: (ev) => {
             addLog(`Agent [${ev.stage}] ${ev.message}`);
             updateLast((msg) => ({ trace: [...(msg.trace || []), ev] }));
@@ -973,12 +984,23 @@ export default function ChatPanel({
     };
 
     try {
+      // Build compact prior-conversation history from the existing thread so
+      // follow-ups can resolve pronouns/references to the most recent Q&A.
+      const history = messages
+        .filter((m) => m.type === 'query' || (m.type === 'answer' && m.text))
+        .slice(-12)
+        .flatMap((m) => {
+          if (m.type === 'query') return [m.text];
+          return [m.text];
+        });
+
       const { data, latency } = await research(
         notebookId,
         query,
         (chunk) => updateLast(() => ({ text: chunk, isStreaming: true })),
         {
           sourceFiles: sourceFilter,
+          history: history.length > 0 ? history : null,
           onTrace: (ev) => {
             addLog(`Research [${ev.stage}] ${ev.message}`);
             updateLast((msg) => ({ trace: [...(msg.trace || []), ev] }));

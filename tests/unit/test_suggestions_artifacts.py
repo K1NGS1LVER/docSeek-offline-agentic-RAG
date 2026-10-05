@@ -184,7 +184,7 @@ def test_ask_followups_emitted(tmp_path):
     mock_llm = MagicMock()
     mock_llm.build_context.return_value = "context"
 
-    async def mock_stream_answer(query, context):
+    async def mock_stream_answer(query, context, history_block=""):
         yield "This is the answer."
 
     mock_llm.stream_answer = mock_stream_answer

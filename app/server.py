@@ -815,7 +815,28 @@ class AskRequest(BaseModel):
     agentic: Optional[bool] = None
     # Restrict retrieval to these sources (filenames as returned by /documents).
     source_files: Optional[List[str]] = None
+    # Compact prior conversation for follow-ups: alternating user/assistant strings.
+    history: Optional[List[str]] = None
     notebook_id: str
+
+
+def _compact_history(history: Optional[List[str]], max_items: int = 6) -> str:
+    """Fold recent conversation turns into a compact text block for the LLM prompt.
+
+    Keeps the last `max_items` entries (user + assistant interleaved) so a
+    follow-up like "why is that better" can see what was just answered without
+    burying the current query under a long thread.
+    """
+    if not history:
+        return ""
+    recent = history[-max_items:]
+    parts = []
+    for i, turn in enumerate(recent, 1):
+        role = "user" if i % 2 == 1 else "assistant"
+        text = (turn or "").strip()
+        if text:
+            parts.append(f"{role.upper()}: {text}")
+    return "\n\n".join(parts)
 
 
 @app.post("/ask")
@@ -828,6 +849,7 @@ async def ask(request: AskRequest):
     """
     rt = get_runtime(request.notebook_id)
     use_agent = AGENTIC_RAG if request.agentic is None else request.agentic
+    history_block = _compact_history(request.history)
 
     async def event_stream():
         try:
@@ -873,11 +895,13 @@ async def ask(request: AskRequest):
             context = llm.build_context(search_results)
             logger.info(
                 f"ASK '{request.query}' agentic={use_agent} → "
-                f"{len(search_results)} chunks, streaming LLM response..."
+                f"{len(search_results)} chunks"
+                + (f", {len(request.history or [])} prior turns" if history_block else "")
+                + "..."
             )
 
             full_answer = ""
-            async for chunk in llm.stream_answer(request.query, context):
+            async for chunk in llm.stream_answer(request.query, context, history_block):
                 full_answer += chunk
                 yield {"data": json.dumps(chunk)}
 

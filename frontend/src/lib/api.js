@@ -334,14 +334,14 @@ export async function search(notebookId, query, k = 5, rerank = false, sourceFil
  * @param {string} query - The user's question
  * @param {number|null} k - Number of chunks to retrieve (null = agent decides)
  * @param {function} onChunk - Called with the accumulated answer text
- * @param {object} [handlers] - Optional { onTrace(event), onSources(list), onFollowups(list), agentic, sourceFiles }
+ * @param {object} [handlers] - Optional { onTrace(event), onSources(list), onFollowups(list), agentic, sourceFiles, history }
  * @returns {Promise<{data: string, latency: number}>}
  */
 export async function ask(notebookId, query, k = null, onChunk, handlers = {}) {
-  const { onTrace, onSources, onFollowups, agentic = null, sourceFiles = null } = handlers;
+  const { onTrace, onSources, onFollowups, agentic = null, sourceFiles = null, history = null } = handlers;
   return streamTypedSSE({
     url: `${BASE}/ask`,
-    body: { query, k, agentic, source_files: sourceFiles, notebook_id: notebookId },
+    body: { query, k, agentic, source_files: sourceFiles, notebook_id: notebookId, history },
     onChunk,
     onTrace,
     onSources,
