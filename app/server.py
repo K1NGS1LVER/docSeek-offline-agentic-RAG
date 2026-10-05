@@ -311,9 +311,13 @@ llm: Optional[OllamaLLM] = None
 
 
 def _check_audio_models_idle() -> tuple[bool, bool]:
-    """Check both STT and TTS models for idle timeout and unload if idle."""
+    """Check both STT and TTS models for idle timeout and unload if idle.
+
+    TTS is kept warm for DOCSEEK_TTS_WARM_KEEP_SECONDS after first use so
+    repeat read-aloud turns stay fast on mid/low-end devices.
+    """
     stt_unloaded = stt.check_idle_unload(DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS)
-    tts_unloaded = tts.check_idle_unload(DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS)
+    tts_unloaded = tts.check_idle_unload_warm(DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS)
     return stt_unloaded, tts_unloaded
 
 

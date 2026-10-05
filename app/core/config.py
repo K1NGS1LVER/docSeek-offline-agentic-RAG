@@ -131,6 +131,12 @@ CHUNKING_STRATEGY = "auto"
 # more accurate. Auto-downloads once from HuggingFace, then cached.
 STT_MODEL = os.environ.get("DOCSEEK_STT_MODEL", "small")
 
+# faster-whisper beam size for /transcribe dictation.
+# Larger beams improve accuracy but cost CPU time roughly linearly; for short
+# dictation into the ask bar, the default 1 is usually good enough and far
+# faster on mid/low-end CPUs. Raise it if dictation quality is the priority.
+STT_BEAM_SIZE = int(os.environ.get("DOCSEEK_STT_BEAM_SIZE", "1"))
+
 # Kokoro-82M TTS voices for the two-host podcast (host A / host B).
 # Full voice list ships with the `kokoro` package.
 TTS_VOICE_A = os.environ.get("DOCSEEK_TTS_VOICE_A", "af_heart")
@@ -142,6 +148,13 @@ RESEARCH_MAX_SECTIONS = 6
 # Idle timeout in seconds before unloading audio models (STT/TTS) to release RAM/VRAM.
 DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS = float(
     os.getenv("DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS", "60")
+)
+
+# Kokoro TTS: after the pipeline has been used once, keep it warm at least this
+# long before considering idle-unload, so repeat read-aloud / podcast turns stay
+# fast instead of paying the cold-start + G2P warmup each time.
+DOCSEEK_TTS_WARM_KEEP_SECONDS = float(
+    os.getenv("DOCSEEK_TTS_WARM_KEEP_SECONDS", str(max(DOCSEEK_AUDIO_IDLE_TIMEOUT_SECONDS, 180.0)))
 )
 
 # ---------------------------------------------------------------------------

@@ -23,7 +23,7 @@ from typing import Iterator, List, Optional
 
 import numpy as np
 
-from .config import TTS_VOICE_A, TTS_VOICE_B
+from .config import TTS_VOICE_A, TTS_VOICE_B, DOCSEEK_TTS_WARM_KEEP_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +206,11 @@ def unload() -> bool:
 def check_idle_unload(timeout_seconds: float) -> bool:
     """Unload the pipeline if it has been idle longer than timeout_seconds.
 
+    For TTS we keep the pipeline warm longer once it has been used, because
+    repeat read-aloud turns reuse the same pipeline + G2P caches. The caller
+    passes the configured warm-keep window; when that has elapsed since the
+    pipeline was first warmed, ordinary idle-unload resumes.
+
     Args:
         timeout_seconds: Max seconds of inactivity before unloading.
 
@@ -221,4 +226,22 @@ def check_idle_unload(timeout_seconds: float) -> bool:
     if idle_time >= timeout_seconds:
         return unload()
     return False
+
+
+def check_idle_unload_warm(timeout_seconds: float) -> bool:
+    """TTS-aware idle-unload: keep the pipeline warm for DOCSEEK_TTS_WARM_KEEP_SECONDS
+    after first use, then fall back to ordinary timeout-based unload.
+
+    This is used by the audio idle checker so a user who reads answers aloud
+    repeatedly does not pay Kokoro cold-start + G2P warmup on each turn.
+    """
+    if _pipeline is None:
+        return False
+
+    idle_time = time.time() - _last_used_time
+    warm_window = DOCSEEK_TTS_WARM_KEEP_SECONDS
+    if idle_time < warm_window:
+        return False
+
+    return check_idle_unload(timeout_seconds)
 

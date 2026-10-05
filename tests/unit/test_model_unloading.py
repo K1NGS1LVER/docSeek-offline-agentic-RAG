@@ -135,11 +135,24 @@ def test_tts_unload_resets_load_failed():
 def test_check_audio_models_idle_invokes_both(monkeypatch):
     stt_mock = MagicMock(return_value=False)
     tts_mock = MagicMock(return_value=False)
+    tts_warm_mock = MagicMock(return_value=False)
     monkeypatch.setattr("app.core.stt.check_idle_unload", stt_mock)
-    monkeypatch.setattr("app.core.tts.check_idle_unload", tts_mock)
+    monkeypatch.setattr("app.core.tts.check_idle_unload_warm", tts_warm_mock)
 
     from app.server import _check_audio_models_idle
 
     _check_audio_models_idle()
     stt_mock.assert_called_once()
-    tts_mock.assert_called_once()
+    tts_warm_mock.assert_called_once()
+
+
+def test_check_audio_models_idle_tts_warm_path(monkeypatch):
+    # When TTS warm-keep is active (recent use), check_idle_unload_warm should
+    # NOT call through to the base check_idle_unload / unload path.
+    tts_warm_mock = MagicMock(return_value=False)
+    monkeypatch.setattr("app.core.tts.check_idle_unload_warm", tts_warm_mock)
+
+    from app.server import _check_audio_models_idle
+
+    _check_audio_models_idle()
+    tts_warm_mock.assert_called_once()

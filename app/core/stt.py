@@ -17,7 +17,7 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from .config import STT_MODEL
+from .config import STT_MODEL, STT_BEAM_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def transcribe(audio_path: str) -> Optional[Dict[str, Any]]:
         return None
 
     _last_used_time = time.time()
-    segments, info = model.transcribe(audio_path, beam_size=5)
+    segments, info = model.transcribe(audio_path, beam_size=STT_BEAM_SIZE)
     # segments is a generator; materialize it to pull the full transcript.
     text = "".join(seg.text for seg in segments).strip()
     _last_used_time = time.time()
