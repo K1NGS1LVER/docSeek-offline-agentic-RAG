@@ -873,6 +873,7 @@ async def ask(request: AskRequest):
 
             chosen_mode = "answer"
             chosen_artifact_type = None
+            agent_results_event = None
             if use_agent:
                 agent = RetrievalAgent(llm=llm, retrieve_fn=retrieve)
                 agent_results = []
@@ -883,8 +884,20 @@ async def ask(request: AskRequest):
                         agent_results = ev["results"]
                         chosen_mode = ev.get("response_mode", "answer")
                         chosen_artifact_type = ev.get("artifact_type")
+                        agent_results_event = ev
             else:
                 agent_results = await run_in_threadpool(retrieve, request.query, request.k or 3)
+
+            # An explicit client request overrides the planner's pick.
+            if request.mode in ("answer", "research", "artifact"):
+                chosen_mode = request.mode
+
+            # Forward the terminal event so clients can see which response
+            # shape was picked (mode chip), reflecting any client override.
+            if agent_results_event is not None:
+                agent_results_event["response_mode"] = chosen_mode
+                agent_results_event["artifact_type"] = chosen_artifact_type
+                yield {"event": "results", "data": json.dumps(agent_results_event)}
 
             search_results = [
                 {
@@ -927,7 +940,6 @@ async def ask(request: AskRequest):
                 async for chunk in llm.stream_answer(request.query, context, history_block):
                     full_answer += chunk
                     yield {"data": json.dumps(chunk)}
-
             # Generate follow-up suggestions (non-blocking to answer delivery)
             try:
                 followup_result = await llm.complete_json(
