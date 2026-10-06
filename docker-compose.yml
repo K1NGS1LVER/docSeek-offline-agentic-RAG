@@ -1,10 +1,74 @@
-version: "3.8"
+# Everything runs here: backend, frontend (nginx), Ollama, SearXNG, Valkey.
+# First run pulls the two custom images from Docker Hub (or builds them with
+# `docker-compose build`), then model weights download once into volumes:
+#   - ollama-init pulls qwen2.5:1.5b into ollama-data
+#   - the embedder/reranker/whisper/kokoro pull into model-cache on first use
+# UI: http://localhost:5173   API: http://localhost:8000
+# All ports bind to 127.0.0.1 only — this is a local-first tool; nothing
+# (Ollama, Valkey, the API) should be reachable from the LAN.
+
 services:
+  backend:
+    image: k1ngs1lver/docseek-backend:latest
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - DOCSEEK_DATA_DIR=/data
+      - DOCSEEK_LLM_BASE_URL=http://ollama:11434/v1
+      - DOCSEEK_SEARXNG_URL=http://searxng:8080
+      - DOCSEEK_VALKEY_URL=redis://valkey:6379/0
+    volumes:
+      # ./data is shared with the native ./run.sh mode (don't run both at once).
+      # On macOS/colima bind mounts map container-root writes to the host user;
+      # on a native Linux Docker host files will be root-owned.
+      - ./data:/data
+      - model-cache:/root/.cache
+    depends_on:
+      - ollama
+      - valkey
+      - searxng
+    restart: unless-stopped
+
+  frontend:
+    image: k1ngs1lver/docseek-frontend:latest
+    build: frontend
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    restart: unless-stopped
+
+  # One-shot: waits for the Ollama daemon, then downloads the chat model.
+  # The backend does NOT wait for this — the retrieval agent degrades to
+  # heuristic defaults until the model lands.
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until ollama list >/dev/null 2>&1; do echo "waiting for ollama..."; sleep 2; done
+        # Guard so re-running `up -d` later (or offline) is a no-op, not a failed pull.
+        ollama list | grep -q qwen2.5:1.5b || ollama pull qwen2.5:1.5b
+    restart: "no"
+
   searxng:
     image: searxng/searxng:latest
     container_name: docseek-searxng
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
@@ -14,12 +78,12 @@ services:
   valkey:
     image: valkey/valkey:8-alpine
     container_name: docseek-valkey
-    ports:
-      - "6379:6379"
+    # No host port: only the backend reaches it over compose DNS.
     volumes:
       - valkey-data:/data
     restart: unless-stopped
 
 volumes:
   valkey-data:
-
+  model-cache:
+  ollama-data:
