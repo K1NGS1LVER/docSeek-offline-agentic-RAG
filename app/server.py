@@ -218,7 +218,6 @@ def _persist_chunks(rt: "Runtime", chunks, embeddings, safe_name, file_path, str
         doc_ids = database.insert_documents_batch(rt.db_path, db_items)
         rt.engine.add_to_index(embeddings, doc_ids=doc_ids)
         rt.engine.save()
-        clear_model_memory()
     return doc_ids
 
 

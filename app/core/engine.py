@@ -239,14 +239,21 @@ class VectorEngine:
 
 
 def clear_model_memory():
-    """Reclaim PyTorch allocator caches and run Python garbage collection."""
+    """Reclaim PyTorch allocator caches and run Python garbage collection.
+
+    Holds _model_lock (the same lock held during model.encode/model.predict)
+    because torch.mps.empty_cache() frees the MPS graph cache while other
+    threads may still be inside an MPS op — a use-after-free race that
+    segfaults the server under concurrent ingest + idle-unload.
+    """
     gc.collect()
-    try:
-        if hasattr(torch, "mps") and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-        elif hasattr(torch, "cuda") and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
+    with _model_lock:
+        try:
+            if hasattr(torch, "mps") and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+            elif hasattr(torch, "cuda") and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 

@@ -16,6 +16,7 @@ import threading
 from typing import Dict, List
 
 from .config import RERANK_MODEL
+from .engine import _model_lock as _torch_mps_lock
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,11 @@ def rerank(query: str, results: List[Dict]) -> List[Dict]:
 
     try:
         pairs = [(query, r["content"]) for r in results]
-        scores = model.predict(pairs, show_progress_bar=False)
+        # _torch_mps_lock serializes with embed() and clear_model_memory():
+        # model.predict runs on MPS, and torch.mps.empty_cache() while an
+        # MPS op is in flight segfaults (MPSGraphCache use-after-free).
+        with _torch_mps_lock:
+            scores = model.predict(pairs, show_progress_bar=False)
         for r, s in zip(results, scores):
             r["rerank_score"] = float(s)
         return sorted(results, key=lambda r: r["rerank_score"], reverse=True)
