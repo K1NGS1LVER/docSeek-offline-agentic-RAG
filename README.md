@@ -81,6 +81,24 @@ Open **[http://localhost:5173](http://localhost:5173)** and you're in. 🎉
 
 ---
 
+## Run with Docker (zero setup)
+
+No Python, Node, Ollama, or brew packages needed — the only prerequisite is [Docker](https://docker.com). Prebuilt multi-architecture images (linux/amd64 + linux/arm64) live on Docker Hub at [`k1ngs1lver/docseek-backend`](https://hub.docker.com/r/k1ngs1lver/docseek-backend) and [`k1ngs1lver/docseek-frontend`](https://hub.docker.com/r/k1ngs1lver/docseek-frontend).
+
+```bash
+docker compose up -d        # or: docker-compose up -d
+```
+
+That starts five containers: **backend**, **frontend** (nginx), **Ollama**, **SearXNG**, and **Valkey**. First run also downloads models once (~3 GB total: `qwen2.5:1.5b` into the Ollama volume, the embedder/reranker/whisper/kokoro weights into the model-cache volume), then everything runs offline.
+
+- UI: **http://localhost:5173** · API: **http://localhost:8000/docs** · Ollama: **http://localhost:11434**
+- All ports bind to `127.0.0.1` only — nothing is exposed to your LAN.
+- Your notebooks are read from/written to the repo's `data/` directory (the same one the native `./run.sh` uses). Don't run both at the same time — they'd share one SQLite file.
+- Verify a running stack with `./scripts/smoke_container.sh`.
+- Rebuild images from source after changes: `docker compose build` (add `docker compose up -d --build` to rebuild and restart).
+
+---
+
 ## Manual Setup (step by step)
 
 Prefer to run each step yourself? Here's exactly what `setup.sh` does.
