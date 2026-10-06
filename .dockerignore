@@ -1,0 +1,14 @@
+# Never ship these into the image build context:
+.venv
+data
+.git
+node_modules
+frontend/node_modules
+frontend/dist
+tests
+__pycache__
+*.pyc
+*.log
+server.log
+lavish
+.lavish
