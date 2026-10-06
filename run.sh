@@ -30,6 +30,19 @@ if [ ! -f "$PYTHON" ]; then
     exit 1
 fi
 
+# Graceful shutdown: armed before any child starts so Ctrl+C during
+# npm install / docker compose is also covered, and escalating to SIGKILL
+# so a child stuck on an open SSE connection can't orphan past Ctrl+C.
+cleanup() {
+    trap - EXIT INT TERM HUP
+    trap '' INT TERM HUP        # a second Ctrl+C / hangup must not abort escalation
+    kill 0 2>/dev/null          # TERM the whole process group (this shell ignores it)
+    sleep 2                     # window for uvicorn/vite graceful exit
+    kill -KILL 0 2>/dev/null    # reap stragglers, this shell included
+    exit 0
+}
+trap cleanup EXIT INT TERM HUP
+
 if [ ! -d "frontend/node_modules" ]; then
     log_info "Installing frontend dependencies..."
     (cd frontend && npm install)
@@ -48,8 +61,6 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
 else
     echo "${CLR_DIM}==> Docker not running. Using built-in DuckDuckGo search and in-memory LRU cache.${CLR_RESET}"
 fi
-
-trap 'kill 0' EXIT INT TERM
 
 $PYTHON -m app.server 2>&1 | sed -u "s|^|${TAG_BACKEND}|" &
 
