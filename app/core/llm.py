@@ -118,6 +118,14 @@ class OllamaLLM:
         return None
 
     @staticmethod
+    def source_label(source: Any) -> str:
+        """Display name for a chunk's source metadata. Ingest writes
+        `source_file` (the path); some writers also include `filename`."""
+        if isinstance(source, dict):
+            return source.get("filename") or source.get("source_file") or "unknown"
+        return "unknown"
+
+    @staticmethod
     def reorder_for_context(search_results: list) -> list:
         """Mitigate "lost in the middle": LLMs attend most to the start and end
         of the prompt, so place the best chunks there and the weakest in the
@@ -146,9 +154,7 @@ class OllamaLLM:
 
         parts = []
         for i, result in numbered:
-            source = "unknown"
-            if result.get("source") and isinstance(result["source"], dict):
-                source = result["source"].get("filename", "unknown")
+            source = self.source_label(result.get("source"))
             content = result.get("content", "")
             parts.append(f"[{i}] {source}\n{content}")
 

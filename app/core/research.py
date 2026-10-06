@@ -117,9 +117,7 @@ class ResearchGraph:
         parts = []
         for chunk in evidence:
             n = chunk["cite"]
-            source = "unknown"
-            if isinstance(chunk.get("source"), dict):
-                source = chunk["source"].get("filename", "unknown")
+            source = OllamaLLM.source_label(chunk.get("source"))
             parts.append(f"[{n}] {source}\n{chunk['content']}")
         return "\n\n".join(parts) if parts else "No relevant context was found."
 
@@ -281,9 +279,7 @@ class ResearchGraph:
         if state.get("sources"):
             delta("## Sources\n\n")
             for c in state["sources"]:
-                name = "unknown"
-                if isinstance(c.get("source"), dict):
-                    name = c["source"].get("filename", "unknown")
+                name = OllamaLLM.source_label(c.get("source"))
                 delta(f"{c['cite']}. {name}\n")
 
         writer({"kind": "trace", "event": {

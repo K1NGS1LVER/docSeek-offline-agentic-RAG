@@ -419,3 +419,17 @@ def test_agent_heuristic_plan_defaults_to_answer():
     plan = agent._heuristic_plan("why is that better", None)
     assert plan["response_mode"] == "answer"
     assert plan["artifact_type"] is None
+
+
+def test_build_context_labels_source_file_only_metadata():
+    """Ingested docs store `source_file` (no `filename`); context must not say 'unknown'."""
+    llm = OllamaLLM()
+    results = [
+        {"id": 1, "content": "chunk A", "source": {"source_file": "notes.txt"}},
+        {"id": 2, "content": "chunk B", "source": {"source_file": "/up/a.pdf", "filename": "a.pdf"}},
+        {"id": 3, "content": "chunk C", "source": None},
+    ]
+    ctx = llm.build_context(results)
+    assert "[1] notes.txt" in ctx
+    assert "[2] a.pdf" in ctx
+    assert "[3] unknown" in ctx
