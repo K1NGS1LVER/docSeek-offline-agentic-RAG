@@ -157,7 +157,9 @@ class PodcastGraph:
         )
         if not isinstance(raw, dict):
             return {"error": "The local LLM is unavailable or returned no outline. "
-                             "Is Ollama running with the configured model pulled?"}
+                             "First `docker compose up` downloads the model via `ollama-init` "
+                             "(`docker compose logs -f ollama-init`); native: `ollama serve` "
+                             "and `ollama pull` the configured model."}
         title = str(raw.get("title") or "Audio Overview").strip()[:120]
         points = raw.get("talking_points")
         if isinstance(points, list):

@@ -17,6 +17,32 @@ from .config import LLM_BASE_URL, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS, LL
 logger = logging.getLogger(__name__)
 
 
+def ollama_hint(err: Exception, model: str) -> str:
+    """Actionable, environment-aware message for an Ollama failure.
+
+    Distinguishes the two cases users hit: the daemon is down vs. the model
+    is still downloading (the normal first-run state of the Docker stack,
+    which used to surface as "make sure Ollama is running" and read like a
+    missing host dependency). Raw detail stays in the log.
+    """
+    text = str(err).lower()
+    offline = isinstance(err, ConnectionError) or any(
+        k in text for k in ("connection", "refused", "broken pipe", "unreachable", "timed out")
+    )
+    if offline:
+        return (
+            f"⚠️ Ollama is unreachable at {LLM_BASE_URL}. "
+            "The Docker stack ships its own Ollama (check `docker compose ps ollama`); "
+            "for native runs start it with `ollama serve`."
+        )
+    return (
+        f"⚠️ Ollama is reachable but the model `{model}` isn't ready yet. "
+        "It downloads automatically on the first `docker compose up` "
+        "(watch `docker compose logs -f ollama-init`); "
+        f"for native runs: `ollama pull {model}`."
+    )
+
+
 # RAG system prompt — instructs the LLM to answer ONLY from provided context
 SYSTEM_PROMPT = """You are a precise documentation assistant for the docSeek system.
 
@@ -185,7 +211,7 @@ class OllamaLLM:
                     yield chunk.choices[0].delta.content
         except Exception as e:
             logger.error(f"LLM streaming error: {e}")
-            yield f"\n\n⚠️ Error communicating with Ollama: {str(e)}\n"
+            yield f"\n\n{ollama_hint(e, self.model)}\n"
 
     async def stream_answer(self, query: str, context: str, history_block: str = ""):
         """
@@ -227,4 +253,4 @@ class OllamaLLM:
 
         except Exception as e:
             logger.error(f"LLM streaming error: {e}")
-            yield f"\n\n⚠️ Error communicating with Ollama: {str(e)}\n\nMake sure Ollama is running (`ollama serve`) and the model is pulled (`ollama pull {self.model}`)."
+            yield f"\n\n{ollama_hint(e, self.model)}\n"

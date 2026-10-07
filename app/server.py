@@ -34,11 +34,12 @@ from app.core.config import (
     SEARXNG_URL,
     LLM_KEEP_ALIVE,
     LLM_LIGHT_MODEL,
+    LLM_MODEL,
 )
 from app.core import database, parsing, chunking, reranker, stt, tts, podcast, research, web_research
 from app.core.cache import cache
 from app.core.engine import VectorEngine, clear_model_memory
-from app.core.llm import OllamaLLM
+from app.core.llm import OllamaLLM, ollama_hint
 from app.core.fusion import reciprocal_rank_fusion
 from app.core.agent import RetrievalAgent
 from app.core.graph import build_graph_data
@@ -674,10 +675,7 @@ def get_friendly_error(e: Exception) -> str:
         or "connection" in err_msg.lower()
         or isinstance(e, (ConnectionError, BrokenPipeError))
     ):
-        return (
-            "⚠️ Connection to Ollama failed. Please make sure Ollama is running (`ollama serve`) "
-            f"and the model is pulled (`ollama pull {LLM_MODEL}`)."
-        )
+        return ollama_hint(e, LLM_MODEL)
     return f"⚠️ Server error: {err_msg}"
 
 
