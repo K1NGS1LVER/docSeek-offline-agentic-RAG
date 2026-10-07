@@ -91,8 +91,17 @@ docker compose up -d        # or: docker-compose up -d
 
 That starts five containers: **backend**, **frontend** (nginx), **Ollama**, **SearXNG**, and **Valkey**. First run also downloads models once (~3 GB total: `qwen2.5:1.5b` into the Ollama volume, the embedder/reranker/whisper/kokoro weights into the model-cache volume), then everything runs offline.
 
-- UI: **http://localhost:5173** · API: **http://localhost:8000/docs** · Ollama: **http://localhost:11434**
-- All ports bind to `127.0.0.1` only — nothing is exposed to your LAN.
+- The chat model is pulled by the one-shot **`ollama-init`** container (a few minutes on first run) — watch it with `docker compose logs -f ollama-init`. Questions asked before it finishes fall back to plain hybrid search. No host Ollama install is involved or needed; a failed pull is retried automatically.
+- UI: **http://localhost:5173** · API: **http://localhost:8000/docs**
+- All ports bind to `127.0.0.1` only — nothing is exposed to your LAN. The Ollama port is deliberately **not** published: it would collide with a host-installed Ollama daemon. To reach the Ollama API from the host anyway (e.g. to `ollama pull` extra models), add a `docker-compose.override.yml`:
+
+```yaml
+services:
+  ollama:
+    ports:
+      - "127.0.0.1:11434:11434"
+```
+
 - Your notebooks are read from/written to the repo's `data/` directory (the same one the native `./run.sh` uses). Don't run both at the same time — they'd share one SQLite file.
 - Verify a running stack with `./scripts/smoke_container.sh`.
 - Rebuild images from source after changes: `docker compose build` (add `docker compose up -d --build` to rebuild and restart).
@@ -281,7 +290,7 @@ Set via environment variables (or edit `app/core/config.py`):
 
 ## Troubleshooting
 
-- **Answers are generic / no citations.** Ollama isn't running or the model isn't pulled. Start Ollama and run `ollama pull qwen2.5:1.5b`. docSeek falls back to plain hybrid search when the LLM is unreachable.
+- **Answers are generic / no citations.** The LLM isn't reachable or the model isn't pulled — docSeek falls back to plain hybrid search in both cases. Docker: check `docker compose logs -f ollama-init` (first run pulls `qwen2.5:1.5b`, takes a few minutes). Native: start Ollama and run `ollama pull qwen2.5:1.5b`.
 - **First query is slow.** Models load lazily on first use (embedder, reranker, Whisper, Kokoro download once). Subsequent runs are fast.
 - **Scanned PDF won't ingest.** Install `tesseract` (OCR). Without it, image-only PDFs are skipped cleanly rather than crashing.
 - **Podcast/TTS fails.** Run `./scripts/install_audio.sh` and install `espeak-ng`.
