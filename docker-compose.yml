@@ -16,6 +16,9 @@ services:
     environment:
       - DOCSEEK_DATA_DIR=/data
       - DOCSEEK_LLM_BASE_URL=http://ollama:11434/v1
+      # Same interpolation as ollama-init below: one source of truth, so an
+      # overridden model can't drift from what actually gets pulled.
+      - DOCSEEK_LLM_MODEL=${DOCSEEK_LLM_MODEL:-qwen2.5:1.5b}
       - DOCSEEK_SEARXNG_URL=http://searxng:8080
       - DOCSEEK_VALKEY_URL=redis://valkey:6379/0
     volumes:
@@ -43,13 +46,17 @@ services:
     image: ollama/ollama:latest
     volumes:
       - ollama-data:/root/.ollama
-    ports:
-      - "127.0.0.1:11434:11434"
+    # No host port on purpose: nothing outside the stack talks to Ollama, and
+    # publishing 11434 collides with a host-installed Ollama daemon (the
+    # container then crash-loops on bind and the whole LLM path dies).
+    # Opt back in with a docker-compose.override.yml (see README).
     restart: unless-stopped
 
   # One-shot: waits for the Ollama daemon, then downloads the chat model.
   # The backend does NOT wait for this — the retrieval agent degrades to
   # heuristic defaults until the model lands.
+  # restart: on-failure: a failed pull (network blip) is retried by Docker
+  # instead of dying silently once; success exits 0 and stays down.
   ollama-init:
     image: ollama/ollama:latest
     depends_on:
@@ -61,8 +68,11 @@ services:
       - |
         until ollama list >/dev/null 2>&1; do echo "waiting for ollama..."; sleep 2; done
         # Guard so re-running `up -d` later (or offline) is a no-op, not a failed pull.
-        ollama list | grep -q qwen2.5:1.5b || ollama pull qwen2.5:1.5b
-    restart: "no"
+        # Model name comes from the same compose interpolation as the backend env.
+        ollama list | grep -q ${DOCSEEK_LLM_MODEL:-qwen2.5:1.5b} && exit 0
+        echo "pulling ${DOCSEEK_LLM_MODEL:-qwen2.5:1.5b} (first run only, ~1 GB)..."
+        ollama pull ${DOCSEEK_LLM_MODEL:-qwen2.5:1.5b} || { echo "pull failed; exiting so Docker retries"; sleep 15; exit 1; }
+    restart: on-failure
 
   searxng:
     image: searxng/searxng:latest
